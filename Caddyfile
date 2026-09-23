@@ -1,0 +1,46 @@
+# Sample production Caddyfile for testing Raddy
+{
+    email ops@raddy.dev
+    http_port 80
+    https_port 443
+    auto_https disable_redirects
+}
+
+(security_headers) {
+    header {
+        X-Content-Type-Options nosniff
+        X-Frame-Options DENY
+        Referrer-Policy strict-origin-when-cross-origin
+        -Server
+    }
+}
+
+localhost:8080 {
+    import security_headers
+
+    root * /var/www/public
+
+    encode gzip zstd
+
+    @api {
+        path /api/*
+        method POST PUT DELETE
+    }
+
+    reverse_proxy @api 127.0.0.1:5000 {
+        lb_policy round_robin
+        header_up X-Real-IP {remote_host}
+        header_up X-Forwarded-For {remote_host}
+    }
+
+    handle /healthz {
+        respond "OK" 200
+    }
+
+    file_server browse
+}
+
+api.raddy.internal {
+    tls internal
+    respond "Internal API Gateway" 200
+}
