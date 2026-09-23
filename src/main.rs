@@ -2,7 +2,9 @@ use std::path::{Path, PathBuf};
 use clap::{Parser, Subcommand};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 use raddy_caddyfile::adapt_caddyfile_from_file;
+use raddy_core::module::ModuleRegistry;
 use raddy_core::state::AppState;
+use raddy_http::server::ServerManager;
 
 #[derive(Parser, Debug)]
 #[command(name = "raddy", version, about = "Raddy - Fast, extensible web server in Rust (Caddy compatible)")]
@@ -80,22 +82,35 @@ async fn main() -> anyhow::Result<()> {
             let internal_config = load_or_adapt(&config)?;
             let state = AppState::new(internal_config);
             let running_cfg = state.config();
+            let registry = ModuleRegistry::new();
 
             tracing::info!("Raddy server initializing...");
-            if let Some(http) = running_cfg.http_app() {
-                for (name, server) in &http.servers {
-                    tracing::info!(
-                        "Configured server '{}' listening on {:?} with {} route(s)",
-                        name,
-                        server.listen,
-                        server.routes.len()
-                    );
+            let mut manager = ServerManager::from_config(&running_cfg, &registry)?;
+
+            manager.bind_all().await?;
+            for srv in manager.servers() {
+                if let Some(local) = srv.local_addr() {
+                    tracing::info!("Server '{}' listening on http://{}", srv.name, local);
                 }
-            } else {
-                tracing::warn!("No HTTP servers configured in config");
             }
 
-            tracing::info!("Raddy server ready (Phase 1 & Phase 2 foundation active)");
+            let (mut join_set, shutdown_tx) = manager.spawn_all();
+            tracing::info!("Raddy server running. Press Ctrl+C to stop.");
+
+            tokio::select! {
+                _ = tokio::signal::ctrl_c() => {
+                    tracing::info!("Received interrupt signal, initiating graceful shutdown...");
+                    let _ = shutdown_tx.send(true);
+                }
+            }
+
+            while let Some(res) = join_set.join_next().await {
+                if let Err(e) = res {
+                    tracing::error!("Server task error: {}", e);
+                }
+            }
+
+            tracing::info!("Raddy server stopped.");
         }
 
         Commands::Fmt { config } => {

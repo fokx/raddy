@@ -12,11 +12,13 @@ path = "src/main.rs"
 members = [
     "crates/raddy-core",
     "crates/raddy-caddyfile",
+    "crates/raddy-http",
 ]
 
 [dependencies]
 raddy-core = { path = "crates/raddy-core" }
 raddy-caddyfile = { path = "crates/raddy-caddyfile" }
+raddy-http = { path = "crates/raddy-http" }
 tokio = { version = "1", features = ["full"] }
 clap = { version = "4", features = ["derive"] }
 tracing = "0.1"
