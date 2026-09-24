@@ -1,5 +1,5 @@
 [package]
-name = "raddy-http"
+name = "raddy-proxy"
 version = "0.1.0"
 edition = "2024"
 license = "Apache-2.0"
@@ -18,14 +18,7 @@ anyhow = "1"
 async-trait = "0.1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-mime_guess = "2"
-raddy-tls = { path = "../raddy-tls" }
-tokio-rustls = "0.26"
-rustls = "0.23"
-rustls-pki-types = "1"
-rustls-pemfile = "2"
-raddy-proxy = { path = "../raddy-proxy" }
+parking_lot = "0.12"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }
-reqwest = { version = "0.12", default-features = false }

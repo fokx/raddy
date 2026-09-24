@@ -1142,6 +1142,7 @@ dependencies = [
  "hyper-util",
  "mime_guess",
  "raddy-core",
+ "raddy-proxy",
  "raddy-tls",
  "reqwest",
  "rustls",
@@ -1156,6 +1157,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "raddy-proxy"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "bytes",
+ "http",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "parking_lot",
+ "raddy-core",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "raddy-server"
 version = "0.1.0"
 dependencies = [
@@ -1164,6 +1185,7 @@ dependencies = [
  "raddy-caddyfile",
  "raddy-core",
  "raddy-http",
+ "raddy-proxy",
  "raddy-tls",
  "serde",
  "serde_json",

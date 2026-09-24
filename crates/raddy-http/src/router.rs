@@ -367,6 +367,11 @@ fn compile_handler(h_cfg: &HandlerConfig, registry: &ModuleRegistry) -> Result<A
             Ok(Arc::new(FileServerHandler::new(root, browse)))
         }
 
+        "reverse_proxy" => {
+            let proxy_handler = raddy_proxy::build_reverse_proxy_from_config(&h_cfg.details)?;
+            Ok(Arc::new(proxy_handler))
+        }
+
         "subroute" => {
             let routes_val = h_cfg.details.get("routes").cloned().unwrap_or(serde_json::Value::Null);
             let sub_routes_cfg: Vec<Route> = serde_json::from_value(routes_val)
