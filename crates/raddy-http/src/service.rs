@@ -14,6 +14,7 @@ pub async fn handle_request(
     req: Request<Incoming>,
     remote_addr: Option<SocketAddr>,
     router: Arc<VirtualHostRouter>,
+    alt_svc_port: Option<u16>,
 ) -> std::result::Result<Response<Full<Bytes>>, std::convert::Infallible> {
     let (parts, incoming_body) = req.into_parts();
 
@@ -35,6 +36,15 @@ pub async fn handle_request(
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("500 Internal Server Error: {}\n", e),
         );
+    }
+
+    // Advertise HTTP/3 over QUIC via Alt-Svc if enabled
+    if let Some(port) = alt_svc_port {
+        if !ctx.response_headers.contains_key("alt-svc") {
+            if let Ok(val) = http::header::HeaderValue::from_str(&format!("h3=\":{}\"; ma=2592000", port)) {
+                ctx.response_headers.insert(http::header::HeaderName::from_static("alt-svc"), val);
+            }
+        }
     }
 
     let status = ctx.status.unwrap_or(StatusCode::OK);

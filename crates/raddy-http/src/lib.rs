@@ -5,6 +5,7 @@
 
 pub mod error;
 pub mod fileserver;
+pub mod http3;
 pub mod router;
 pub mod server;
 pub mod service;

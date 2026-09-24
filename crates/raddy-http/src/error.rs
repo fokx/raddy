@@ -16,6 +16,9 @@ pub enum HttpServerError {
 
     #[error("Address parse error: {0}")]
     AddrParse(#[from] std::net::AddrParseError),
+
+    #[error("HTTP/3 error: {0}")]
+    Http3(String),
 }
 
 pub type Result<T> = std::result::Result<T, HttpServerError>;

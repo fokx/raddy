@@ -18,6 +18,8 @@ pub struct TlsManager {
 
 impl TlsManager {
     pub fn new(email: Option<String>, staging: bool) -> Result<Self> {
+        crate::install_default_crypto_provider();
+
         let local_ca = Arc::new(LocalCa::new()?);
         let storage = Arc::new(FileCertStorage::new(FileCertStorage::default_dir()));
         let challenge_store = Http01ChallengeStore::new();

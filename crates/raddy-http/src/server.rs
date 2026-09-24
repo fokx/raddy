@@ -13,12 +13,16 @@ use crate::error::{HttpServerError, Result};
 use crate::router::{compile_virtual_host_router, VirtualHostRouter};
 use crate::service::handle_request;
 
-/// A running HTTP or HTTPS server instance bound to a TCP address.
+/// A running HTTP or HTTPS server instance bound to a TCP address (and optionally a UDP address for HTTP/3).
 pub struct HttpServerInstance {
     pub name: String,
     pub listen_addr: String,
     pub router: Arc<VirtualHostRouter>,
     pub tls_acceptor: Option<TlsAcceptor>,
+    pub quic_server_config: Option<quinn::ServerConfig>,
+    pub quic_endpoint: Option<quinn::Endpoint>,
+    pub protocols: Vec<String>,
+    pub alt_svc_port: Option<u16>,
     listener: Option<TcpListener>,
     local_addr: Option<SocketAddr>,
 }
@@ -30,6 +34,10 @@ impl HttpServerInstance {
             listen_addr: listen_addr.into(),
             router: Arc::new(router),
             tls_acceptor: None,
+            quic_server_config: None,
+            quic_endpoint: None,
+            protocols: vec!["h1".into(), "h2".into(), "h3".into()],
+            alt_svc_port: None,
             listener: None,
             local_addr: None,
         }
@@ -40,7 +48,17 @@ impl HttpServerInstance {
         self
     }
 
-    /// Binds the TCP listener.
+    pub fn with_quic_config(mut self, config: quinn::ServerConfig) -> Self {
+        self.quic_server_config = Some(config);
+        self
+    }
+
+    pub fn with_protocols(mut self, protocols: Vec<String>) -> Self {
+        self.protocols = protocols;
+        self
+    }
+
+    /// Binds the TCP listener (and UDP endpoint for HTTP/3 if configured).
     pub async fn bind(&mut self) -> Result<()> {
         let addr = if self.listen_addr.starts_with(':') {
             format!("0.0.0.0{}", self.listen_addr)
@@ -53,7 +71,27 @@ impl HttpServerInstance {
         self.local_addr = Some(local_addr);
         self.listener = Some(listener);
 
-        let proto = if self.tls_acceptor.is_some() { "HTTPS" } else { "HTTP" };
+        // Bind QUIC UDP endpoint on the same address if TLS and h3 are enabled
+        if self.tls_acceptor.is_some() && self.protocols.iter().any(|p| p == "h3") {
+            if let Some(quic_cfg) = self.quic_server_config.take() {
+                match quinn::Endpoint::server(quic_cfg, local_addr) {
+                    Ok(ep) => {
+                        tracing::info!("Server '{}' [HTTP/3 QUIC] successfully bound to UDP {}", self.name, local_addr);
+                        self.quic_endpoint = Some(ep);
+                        self.alt_svc_port = Some(local_addr.port());
+                    }
+                    Err(e) => {
+                        tracing::warn!("Failed to bind QUIC endpoint on UDP {}: {}", local_addr, e);
+                    }
+                }
+            }
+        }
+
+        let proto = if self.tls_acceptor.is_some() {
+            if self.quic_endpoint.is_some() { "HTTPS (HTTP/1.1, HTTP/2, HTTP/3)" } else { "HTTPS (HTTP/1.1, HTTP/2)" }
+        } else {
+            "HTTP (HTTP/1.1, HTTP/2 Cleartext)"
+        };
         tracing::info!("Server '{}' [{}] successfully bound to {}", self.name, proto, local_addr);
         Ok(())
     }
@@ -71,6 +109,8 @@ impl HttpServerInstance {
         let router = self.router.clone();
         let tls_acceptor = self.tls_acceptor.clone();
         let auto_builder = Builder::new(TokioExecutor::new());
+        let alt_svc_port = self.alt_svc_port;
+        let quic_endpoint = self.quic_endpoint;
 
         loop {
             tokio::select! {
@@ -83,7 +123,7 @@ impl HttpServerInstance {
 
                             tokio::spawn(async move {
                                 if let Some(acceptor) = acceptor_opt {
-                                    // TLS handshake
+                                    // TLS handshake (HTTP/1.1 or HTTP/2)
                                     let tls_stream = match acceptor.accept(tcp_stream).await {
                                         Ok(s) => s,
                                         Err(e) => {
@@ -95,7 +135,7 @@ impl HttpServerInstance {
                                     let service = hyper::service::service_fn(move |req| {
                                         let r = router_clone.clone();
                                         async move {
-                                            handle_request(req, Some(remote_addr), r).await
+                                            handle_request(req, Some(remote_addr), r, alt_svc_port).await
                                         }
                                     });
 
@@ -103,12 +143,12 @@ impl HttpServerInstance {
                                         tracing::debug!("HTTPS connection error: {}", err);
                                     }
                                 } else {
-                                    // Cleartext HTTP
+                                    // Cleartext HTTP (HTTP/1.1 or HTTP/2 cleartext)
                                     let io = TokioIo::new(tcp_stream);
                                     let service = hyper::service::service_fn(move |req| {
                                         let r = router_clone.clone();
                                         async move {
-                                            handle_request(req, Some(remote_addr), r).await
+                                            handle_request(req, Some(remote_addr), r, None).await
                                         }
                                     });
 
@@ -124,9 +164,35 @@ impl HttpServerInstance {
                     }
                 }
 
+                Some(incoming) = async {
+                    if let Some(ref ep) = quic_endpoint {
+                        ep.accept().await
+                    } else {
+                        std::future::pending().await
+                    }
+                } => {
+                    let router_clone = router.clone();
+                    tokio::spawn(async move {
+                        match incoming.await {
+                            Ok(conn) => {
+                                let remote = conn.remote_address();
+                                if let Err(e) = crate::http3::serve_h3_connection(conn, remote, router_clone).await {
+                                    tracing::debug!("H3 connection error from {}: {}", remote, e);
+                                }
+                            }
+                            Err(e) => {
+                                tracing::debug!("QUIC handshake failed: {}", e);
+                            }
+                        }
+                    });
+                }
+
                 _ = shutdown_rx.changed() => {
                     if *shutdown_rx.borrow() {
                         tracing::info!("Server '{}' on {} shutting down gracefully", self.name, self.listen_addr);
+                        if let Some(ep) = quic_endpoint {
+                            ep.close(0u32.into(), b"server shutdown");
+                        }
                         break;
                     }
                 }
@@ -158,8 +224,9 @@ impl ServerManager {
                 let vhost_router = compile_virtual_host_router(srv_cfg, registry)?;
                 let listen_addr = srv_cfg.listen.first().cloned().unwrap_or_else(|| ":80".into());
                 let is_tls = listen_addr.ends_with(":443") || srv_cfg.tls_connection_policies.is_some();
+                let protocols = srv_cfg.protocols.clone().unwrap_or_else(|| vec!["h1".into(), "h2".into(), "h3".into()]);
 
-                let mut instance = HttpServerInstance::new(name, listen_addr, vhost_router);
+                let mut instance = HttpServerInstance::new(name, listen_addr, vhost_router).with_protocols(protocols);
 
                 if is_tls {
                     if let Some(ref tls) = tls_manager {
@@ -175,11 +242,11 @@ impl ServerManager {
                                                     .as_ref()
                                                     .map(|pols| pols.iter().any(|p| {
                                                         p.certificate_selection
-                                                            .as_ref()
-                                                            .and_then(|cs| cs.any_tag.as_ref())
-                                                            .map(|tags| tags.iter().any(|t| t == "internal"))
-                                                            .unwrap_or(false)
-                                                    }))
+                                                             .as_ref()
+                                                             .and_then(|cs| cs.any_tag.as_ref())
+                                                             .map(|tags| tags.iter().any(|t| t == "internal"))
+                                                             .unwrap_or(false)
+                                                     }))
                                                     .unwrap_or(false);
 
                                                 if let Err(e) = tls.provision_identifier(h, force_internal).await {
@@ -195,12 +262,19 @@ impl ServerManager {
                         if let Ok(acceptor) = tls.build_tls_acceptor() {
                             instance = instance.with_tls_acceptor(acceptor);
                         }
+
+                        if let Ok(rustls_cfg) = tls.build_server_config() {
+                            if let Ok(quic_cfg) = crate::http3::build_quic_server_config(&rustls_cfg) {
+                                instance = instance.with_quic_config(quic_cfg);
+                            }
+                        }
                     }
                 }
 
                 servers.push(instance);
             }
         }
+
 
         Ok(Self {
             servers,

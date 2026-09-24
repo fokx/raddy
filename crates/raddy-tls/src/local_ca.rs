@@ -15,6 +15,8 @@ pub struct LocalCa {
 impl LocalCa {
     /// Generates or initializes a Local Root CA.
     pub fn new() -> Result<Self> {
+        crate::install_default_crypto_provider();
+
         let mut params = CertificateParams::default();
         params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
 

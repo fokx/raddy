@@ -25,7 +25,12 @@ rustls = "0.23"
 rustls-pki-types = "1"
 rustls-pemfile = "2"
 raddy-proxy = { path = "../raddy-proxy" }
+quinn = { version = "0.11", default-features = false, features = ["runtime-tokio", "rustls-aws-lc-rs"] }
+h3 = "0.0.8"
+h3-quinn = "0.0.10"
+
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }
-reqwest = { version = "0.12", default-features = false }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "http2"] }
+

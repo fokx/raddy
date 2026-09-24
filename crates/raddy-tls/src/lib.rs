@@ -16,3 +16,8 @@ pub use local_ca::LocalCa;
 pub use manager::{is_local_or_private, TlsManager};
 pub use sni::SniResolver;
 pub use storage::{parse_certified_key, CertStorage, FileCertStorage};
+
+/// Installs the default process-level CryptoProvider (AWS-LC-RS) for Rustls.
+pub fn install_default_crypto_provider() {
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+}
