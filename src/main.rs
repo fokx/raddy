@@ -85,12 +85,14 @@ async fn main() -> anyhow::Result<()> {
             let registry = ModuleRegistry::new();
 
             tracing::info!("Raddy server initializing...");
-            let mut manager = ServerManager::from_config(&running_cfg, &registry)?;
+            let tls_manager = std::sync::Arc::new(raddy_tls::TlsManager::new(None, true)?);
+            let mut manager = ServerManager::from_config(&running_cfg, &registry, Some(tls_manager)).await?;
 
             manager.bind_all().await?;
             for srv in manager.servers() {
                 if let Some(local) = srv.local_addr() {
-                    tracing::info!("Server '{}' listening on http://{}", srv.name, local);
+                    let proto = if srv.tls_acceptor.is_some() { "https" } else { "http" };
+                    tracing::info!("Server '{}' listening on {}://{}", srv.name, proto, local);
                 }
             }
 
