@@ -60,13 +60,33 @@ impl HttpServerInstance {
 
     /// Binds the TCP listener (and UDP endpoint for HTTP/3 if configured).
     pub async fn bind(&mut self) -> Result<()> {
-        let addr = if self.listen_addr.starts_with(':') {
+        let addr_str = if self.listen_addr.starts_with(':') {
             format!("0.0.0.0{}", self.listen_addr)
         } else {
             self.listen_addr.clone()
         };
 
-        let listener = TcpListener::bind(&addr).await?;
+        let sock_addr: SocketAddr = tokio::net::lookup_host(&addr_str)
+            .await?
+            .next()
+            .ok_or_else(|| HttpServerError::Server(format!("Failed to resolve address: {}", addr_str)))?;
+
+        let domain = if sock_addr.is_ipv6() {
+            socket2::Domain::IPV6
+        } else {
+            socket2::Domain::IPV4
+        };
+
+        let socket = socket2::Socket::new(domain, socket2::Type::STREAM, None)?;
+        socket.set_reuse_address(true)?;
+        #[cfg(all(unix, not(target_os = "solaris"), not(target_os = "illumos")))]
+        let _ = socket.set_reuse_port(true);
+        socket.set_nonblocking(true)?;
+        socket.bind(&sock_addr.into())?;
+        socket.listen(1024)?;
+
+        let std_listener: std::net::TcpListener = socket.into();
+        let listener = TcpListener::from_std(std_listener)?;
         let local_addr = listener.local_addr()?;
         self.local_addr = Some(local_addr);
         self.listener = Some(listener);
@@ -120,6 +140,7 @@ impl HttpServerInstance {
                             let router_clone = router.clone();
                             let builder = auto_builder.clone();
                             let acceptor_opt = tls_acceptor.clone();
+                            let mut conn_shutdown_rx = shutdown_rx.clone();
 
                             tokio::spawn(async move {
                                 if let Some(acceptor) = acceptor_opt {
@@ -139,8 +160,18 @@ impl HttpServerInstance {
                                         }
                                     });
 
-                                    if let Err(err) = builder.serve_connection_with_upgrades(io, service).await {
-                                        tracing::debug!("HTTPS connection error: {}", err);
+                                    let conn = builder.serve_connection_with_upgrades(io, service).into_owned();
+                                    tokio::pin!(conn);
+                                    tokio::select! {
+                                        res = &mut conn => {
+                                            if let Err(err) = res {
+                                                tracing::debug!("HTTPS connection error: {}", err);
+                                            }
+                                        }
+                                        _ = conn_shutdown_rx.changed() => {
+                                            conn.as_mut().graceful_shutdown();
+                                            let _ = conn.await;
+                                        }
                                     }
                                 } else {
                                     // Cleartext HTTP (HTTP/1.1 or HTTP/2 cleartext)
@@ -152,8 +183,18 @@ impl HttpServerInstance {
                                         }
                                     });
 
-                                    if let Err(err) = builder.serve_connection_with_upgrades(io, service).await {
-                                        tracing::debug!("HTTP connection error: {}", err);
+                                    let conn = builder.serve_connection_with_upgrades(io, service).into_owned();
+                                    tokio::pin!(conn);
+                                    tokio::select! {
+                                        res = &mut conn => {
+                                            if let Err(err) = res {
+                                                tracing::debug!("HTTP connection error: {}", err);
+                                            }
+                                        }
+                                        _ = conn_shutdown_rx.changed() => {
+                                            conn.as_mut().graceful_shutdown();
+                                            let _ = conn.await;
+                                        }
                                     }
                                 }
                             });
@@ -318,7 +359,24 @@ impl ServerManager {
         (join_set, shutdown_tx)
     }
 
+    /// Spawns background tasks running all server instances detached into the Tokio runtime.
+    pub fn spawn_all_detached(self) -> watch::Sender<bool> {
+        let shutdown_tx = self.shutdown_tx.clone();
+
+        for srv in self.servers {
+            let rx = shutdown_tx.subscribe();
+            tokio::spawn(async move {
+                if let Err(e) = srv.run(rx).await {
+                    tracing::debug!("Server error: {}", e);
+                }
+            });
+        }
+
+        shutdown_tx
+    }
+
     pub fn trigger_shutdown(&self) {
         let _ = self.shutdown_tx.send(true);
     }
 }
+

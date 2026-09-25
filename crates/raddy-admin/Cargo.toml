@@ -1,0 +1,27 @@
+[package]
+name = "raddy-admin"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+
+[dependencies]
+raddy-core = { path = "../raddy-core" }
+raddy-caddyfile = { path = "../raddy-caddyfile" }
+raddy-http = { path = "../raddy-http" }
+raddy-tls = { path = "../raddy-tls" }
+raddy-proxy = { path = "../raddy-proxy" }
+axum = "0.8"
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+arc-swap = "1"
+parking_lot = "0.12"
+tracing = "0.1"
+thiserror = "2"
+anyhow = "1"
+http = "1"
+bytes = "1"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full"] }
+reqwest = { version = "0.12", default-features = false, features = ["json"] }

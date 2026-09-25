@@ -3,8 +3,6 @@ use clap::{Parser, Subcommand};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 use raddy_caddyfile::adapt_caddyfile_from_file;
 use raddy_core::module::ModuleRegistry;
-use raddy_core::state::AppState;
-use raddy_http::server::ServerManager;
 
 #[derive(Parser, Debug)]
 #[command(name = "raddy", version, about = "Raddy - Fast, extensible web server in Rust (Caddy compatible)")]
@@ -38,6 +36,24 @@ enum Commands {
         /// Path to the Caddyfile or JSON config
         #[arg(short, long, default_value = "Caddyfile")]
         config: PathBuf,
+    },
+
+    /// Sends a configuration reload request to a running Raddy instance via Admin API
+    Reload {
+        /// Path to the Caddyfile or JSON config
+        #[arg(short, long, default_value = "Caddyfile")]
+        config: PathBuf,
+
+        /// Admin API address
+        #[arg(short, long, default_value = "http://127.0.0.1:2019")]
+        address: String,
+    },
+
+    /// Sends a stop request to a running Raddy instance via Admin API
+    Stop {
+        /// Admin API address
+        #[arg(short, long, default_value = "http://127.0.0.1:2019")]
+        address: String,
     },
 
     /// Formats or inspects a Caddyfile
@@ -80,39 +96,102 @@ async fn main() -> anyhow::Result<()> {
 
         Commands::Run { config } => {
             let internal_config = load_or_adapt(&config)?;
-            let state = AppState::new(internal_config);
-            let running_cfg = state.config();
-            let registry = ModuleRegistry::new();
+            let registry = std::sync::Arc::new(ModuleRegistry::new());
+
+            let admin_listen = internal_config.admin.as_ref()
+                .and_then(|a| a.listen.clone())
+                .unwrap_or_else(|| "127.0.0.1:2019".into());
+            let admin_disabled = internal_config.admin.as_ref()
+                .and_then(|a| a.disabled)
+                .unwrap_or(false);
 
             tracing::info!("Raddy server initializing...");
             let tls_manager = std::sync::Arc::new(raddy_tls::TlsManager::new(None, true)?);
-            let mut manager = ServerManager::from_config(&running_cfg, &registry, Some(tls_manager)).await?;
+            let state = std::sync::Arc::new(raddy_admin::AppState::new(
+                internal_config.clone(),
+                registry,
+                Some(tls_manager),
+            ));
 
-            manager.bind_all().await?;
-            for srv in manager.servers() {
-                if let Some(local) = srv.local_addr() {
-                    let proto = if srv.tls_acceptor.is_some() { "https" } else { "http" };
-                    tracing::info!("Server '{}' listening on {}://{}", srv.name, proto, local);
+            // Start HTTP/HTTPS servers
+            state.reload(internal_config).await?;
+
+            let (admin_shutdown_tx, admin_shutdown_rx) = tokio::sync::watch::channel(false);
+            let admin_task = if !admin_disabled {
+                let mut admin_server = raddy_admin::AdminServer::new(admin_listen, state.clone());
+                match admin_server.bind().await {
+                    Ok(_) => {
+                        let rx = admin_shutdown_rx.clone();
+                        Some(tokio::spawn(async move {
+                            if let Err(e) = admin_server.run(rx).await {
+                                tracing::warn!("Admin server error: {}", e);
+                            }
+                        }))
+                    }
+                    Err(e) => {
+                        tracing::warn!("Failed to bind Admin API: {}. Running without Admin API.", e);
+                        None
+                    }
                 }
-            }
+            } else {
+                None
+            };
 
-            let (mut join_set, shutdown_tx) = manager.spawn_all();
             tracing::info!("Raddy server running. Press Ctrl+C to stop.");
 
             tokio::select! {
                 _ = tokio::signal::ctrl_c() => {
                     tracing::info!("Received interrupt signal, initiating graceful shutdown...");
-                    let _ = shutdown_tx.send(true);
                 }
             }
 
-            while let Some(res) = join_set.join_next().await {
-                if let Err(e) = res {
-                    tracing::error!("Server task error: {}", e);
-                }
+            let _ = admin_shutdown_tx.send(true);
+            state.stop_all();
+
+            if let Some(task) = admin_task {
+                let _ = task.await;
             }
 
             tracing::info!("Raddy server stopped.");
+        }
+
+        Commands::Reload { config, address } => {
+            let content = std::fs::read_to_string(&config)?;
+            let is_json = config.extension().and_then(|e| e.to_str()) == Some("json");
+            let content_type = if is_json { "application/json" } else { "text/caddyfile" };
+
+            let client = reqwest::Client::new();
+            let url = format!("{}/load", address.trim_end_matches('/'));
+            tracing::info!("Sending reload request to {}...", url);
+
+            let resp = client.post(&url)
+                .header("content-type", content_type)
+                .body(content)
+                .send()
+                .await?;
+
+            if resp.status().is_success() {
+                println!("Successfully reloaded configuration via Admin API.");
+            } else {
+                let err_text = resp.text().await?;
+                eprintln!("Failed to reload configuration: {}", err_text);
+                std::process::exit(1);
+            }
+        }
+
+        Commands::Stop { address } => {
+            let client = reqwest::Client::new();
+            let url = format!("{}/stop", address.trim_end_matches('/'));
+            tracing::info!("Sending stop request to {}...", url);
+
+            let resp = client.post(&url).send().await?;
+            if resp.status().is_success() {
+                println!("Stop signal accepted by Admin API.");
+            } else {
+                let err_text = resp.text().await?;
+                eprintln!("Failed to stop server: {}", err_text);
+                std::process::exit(1);
+            }
         }
 
         Commands::Fmt { config } => {

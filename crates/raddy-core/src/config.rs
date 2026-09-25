@@ -12,6 +12,9 @@ pub struct Config {
 
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub apps: HashMap<String, serde_json::Value>,
+
+    #[serde(flatten, default, skip_serializing_if = "HashMap::is_empty")]
+    pub extra: HashMap<String, serde_json::Value>,
 }
 
 impl Config {
