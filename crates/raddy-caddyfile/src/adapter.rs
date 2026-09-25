@@ -20,25 +20,27 @@ pub const DIRECTIVE_ORDER: &[&str] = &[
     "request_id",
     "header",
     "request_header",
-    "encode",
+    "request_body",
+    "basic_auth",
+    "forward_auth",
+    "rewrite",
+    "uri",
+    "try_files",
     "push",
-    "templates",
     "invoke",
     "redir",
     "respond",
     "abort",
     "error",
-    "rewrite",
-    "uri",
-    "try_files",
-    "basic_auth",
-    "forward_auth",
-    "request_body",
     "php_fastcgi",
     "file_server",
     "acme_server",
     "reverse_proxy",
+    "templates",
+    "encode",
 ];
+
+
 
 pub struct Adapter {
     http_port: u16,
@@ -537,6 +539,110 @@ impl Adapter {
                 }
             }
 
+            "templates" => {
+                let cfg = HandlerConfig::new("templates");
+                configs.push(cfg);
+            }
+
+            "basic_auth" => {
+                let mut users = HashMap::new();
+                let mut realm = None;
+
+                if dir.args.len() == 1 {
+                    realm = Some(dir.args[0].clone());
+                } else if dir.args.len() == 2 {
+                    users.insert(dir.args[0].clone(), dir.args[1].clone());
+                } else if dir.args.len() >= 3 {
+                    realm = Some(dir.args[0].clone());
+                    users.insert(dir.args[1].clone(), dir.args[2].clone());
+                }
+
+                if let Some(ref block) = dir.block {
+                    for sub in block {
+                        if let Some(pass) = sub.args.first() {
+                            users.insert(sub.name.clone(), pass.clone());
+                        }
+                    }
+                }
+
+                let mut cfg = HandlerConfig::new("basic_auth").with_field("users", users);
+                if let Some(r) = realm {
+                    cfg = cfg.with_field("realm", r);
+                }
+                configs.push(cfg);
+            }
+
+            "forward_auth" => {
+                let upstream = dir.args.first().cloned().unwrap_or_default();
+                let mut uri = None;
+                let mut copy_headers = Vec::new();
+
+                if let Some(ref block) = dir.block {
+                    for sub in block {
+                        match sub.name.as_str() {
+                            "uri" => {
+                                uri = sub.args.first().cloned();
+                            }
+                            "copy_headers" => {
+                                copy_headers.extend(sub.args.clone());
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+
+                let mut cfg = HandlerConfig::new("forward_auth")
+                    .with_field("upstream", upstream)
+                    .with_field("copy_headers", copy_headers);
+                if let Some(u) = uri {
+                    cfg = cfg.with_field("uri", u);
+                }
+                configs.push(cfg);
+            }
+
+            "request_body" => {
+                let mut max_size_str = dir.args.first().cloned();
+                if let Some(ref block) = dir.block {
+                    for sub in block {
+                        if sub.name == "max_size" {
+                            max_size_str = sub.args.first().cloned();
+                        }
+                    }
+                }
+                let size_bytes = max_size_str.as_deref().map(parse_size_bytes).unwrap_or(10 * 1024 * 1024);
+                let cfg = HandlerConfig::new("request_body").with_field("max_size", size_bytes);
+                configs.push(cfg);
+            }
+
+            "map" => {
+                let source = dir.args.first().cloned().unwrap_or_default();
+                let dest = dir.args.get(1).cloned().unwrap_or_default();
+                let mut default_val = None;
+                let mut mappings = Vec::new();
+
+                if let Some(ref block) = dir.block {
+                    for sub in block {
+                        if sub.name == "default" {
+                            default_val = sub.args.first().cloned();
+                        } else if let Some(val) = sub.args.first() {
+                            mappings.push(serde_json::json!({
+                                "pattern": sub.name,
+                                "value": val,
+                            }));
+                        }
+                    }
+                }
+
+                let mut cfg = HandlerConfig::new("map")
+                    .with_field("source", source)
+                    .with_field("dest", dest)
+                    .with_field("mappings", mappings);
+                if let Some(def) = default_val {
+                    cfg = cfg.with_field("default", def);
+                }
+                configs.push(cfg);
+            }
+
             "abort" => {
                 let cfg = HandlerConfig::new("abort");
                 configs.push(cfg);
@@ -554,6 +660,7 @@ impl Adapter {
                     .with_field("status_code", code);
                 configs.push(cfg);
             }
+
 
             other => {
                 // Generic handler passthrough
@@ -577,6 +684,22 @@ fn json_upstream(addr: &str) -> serde_json::Value {
     };
     serde_json::json!({ "dial": dial })
 }
+
+fn parse_size_bytes(s: &str) -> usize {
+    let s = s.trim().to_lowercase();
+    if let Some(stripped) = s.strip_suffix("gb") {
+        stripped.trim().parse::<usize>().unwrap_or(0) * 1024 * 1024 * 1024
+    } else if let Some(stripped) = s.strip_suffix("mb") {
+        stripped.trim().parse::<usize>().unwrap_or(0) * 1024 * 1024
+    } else if let Some(stripped) = s.strip_suffix("kb") {
+        stripped.trim().parse::<usize>().unwrap_or(0) * 1024
+    } else if let Some(stripped) = s.strip_suffix('b') {
+        stripped.trim().parse::<usize>().unwrap_or(0)
+    } else {
+        s.parse::<usize>().unwrap_or(0)
+    }
+}
+
 
 #[derive(Debug, Clone)]
 struct ParsedAddress {

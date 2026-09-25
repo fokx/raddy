@@ -10,6 +10,12 @@ use crate::placeholder::eval_placeholders;
 #[async_trait]
 pub trait Handler: Send + Sync {
     async fn handle(&self, ctx: &mut Context) -> Result<()>;
+
+    /// Indicates whether this handler transforms an already-generated response
+    /// (e.g. `templates`, `encode`, response `headers`).
+    fn is_response_transformer(&self) -> bool {
+        false
+    }
 }
 
 /// Static response handler (for `respond`, `error`).
@@ -144,7 +150,12 @@ impl Handler for HeadersHandler {
 
         Ok(())
     }
+
+    fn is_response_transformer(&self) -> bool {
+        !self.set_response_headers.is_empty() || !self.delete_response_headers.is_empty()
+    }
 }
+
 
 /// Sets custom variables in the request context (for `vars`).
 #[derive(Debug, Clone)]

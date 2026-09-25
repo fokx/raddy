@@ -30,10 +30,15 @@ impl CompiledRoute {
         true
     }
 
+    pub fn is_response_transformer(&self) -> bool {
+        self.handlers.iter().any(|h| h.is_response_transformer())
+    }
+
     pub async fn execute(&self, ctx: &mut Context) -> Result<()> {
+        let is_transformer = self.is_response_transformer();
         for h in &self.handlers {
             h.handle(ctx).await?;
-            if ctx.response_written {
+            if !is_transformer && ctx.response_written {
                 break;
             }
         }
@@ -63,13 +68,18 @@ impl Router {
             }
 
             if route.matches(ctx) {
+                // If a response has already been written, only execute response transformers
+                if ctx.response_written && !route.is_response_transformer() {
+                    continue;
+                }
+
                 if let Some(ref grp) = route.group {
                     executed_groups.insert(grp.clone());
                 }
 
                 route.execute(ctx).await?;
 
-                if route.terminal || ctx.response_written {
+                if route.terminal {
                     break;
                 }
             }
@@ -78,6 +88,7 @@ impl Router {
         Ok(())
     }
 }
+
 
 /// Subroute handler for nested routing (`route` and `handle` blocks).
 pub struct SubrouteHandler {
@@ -382,6 +393,88 @@ fn compile_handler(h_cfg: &HandlerConfig, registry: &ModuleRegistry) -> Result<A
                 compiled_subroutes.push(compile_route(r, registry)?);
             }
             Ok(Arc::new(SubrouteHandler::new(Router::new(compiled_subroutes))))
+        }
+
+        "encode" => {
+            let encodings = h_cfg
+                .details
+                .get("encodings")
+                .and_then(|v| v.as_array())
+                .map(|arr| arr.iter().filter_map(|x| x.as_str().map(|s| s.to_string())).collect())
+                .unwrap_or_else(|| vec!["zstd".into(), "gzip".into()]);
+            Ok(Arc::new(crate::encode::EncodeHandler::from_format_names(&encodings)))
+        }
+
+        "templates" => {
+            Ok(Arc::new(crate::templates::TemplatesHandler::new()))
+        }
+
+        "basic_auth" | "authentication" => {
+            let mut users = HashMap::new();
+            if let Some(map) = h_cfg.details.get("users").and_then(|v| v.as_object()) {
+                for (k, v) in map {
+                    if let Some(s) = v.as_str() {
+                        users.insert(k.clone(), s.to_string());
+                    }
+                }
+            }
+            let realm = h_cfg.details.get("realm").and_then(|v| v.as_str()).map(|s| s.to_string());
+            Ok(Arc::new(crate::auth::BasicAuthHandler::new(users, realm)))
+        }
+
+        "forward_auth" => {
+            let upstream = h_cfg.details.get("upstream").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let uri_override = h_cfg.details.get("uri").and_then(|v| v.as_str()).map(|s| s.to_string());
+            let mut copy_headers = Vec::new();
+            if let Some(arr) = h_cfg.details.get("copy_headers").and_then(|v| v.as_array()) {
+                for item in arr {
+                    if let Some(s) = item.as_str() {
+                        copy_headers.push(s.to_string());
+                    }
+                }
+            }
+            Ok(Arc::new(crate::auth::ForwardAuthHandler::new(upstream, uri_override, copy_headers)))
+        }
+
+        "request_body" => {
+            let max_size = h_cfg
+                .details
+                .get("max_size")
+                .and_then(|v| v.as_u64())
+                .map(|s| s as usize)
+                .unwrap_or(10 * 1024 * 1024);
+            Ok(Arc::new(crate::limits::RequestBodyLimitHandler::new(max_size)))
+        }
+
+        "map" => {
+            let source = h_cfg.details.get("source").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let dest = h_cfg.details.get("dest").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let default_val = h_cfg.details.get("default").and_then(|v| v.as_str()).map(|s| s.to_string());
+            let mut mappings = Vec::new();
+            if let Some(arr) = h_cfg.details.get("mappings").and_then(|v| v.as_array()) {
+                for item in arr {
+                    if let Some(obj) = item.as_object() {
+                        if let (Some(k), Some(v)) = (
+                            obj.get("pattern").and_then(|x| x.as_str()),
+                            obj.get("value").and_then(|x| x.as_str()),
+                        ) {
+                            mappings.push((k.to_string(), v.to_string()));
+                        }
+                    }
+                }
+            }
+            Ok(Arc::new(crate::map::MapHandler::new(source, dest, mappings, default_val)))
+        }
+
+        "abort" => {
+            Ok(Arc::new(crate::flow::AbortHandler))
+        }
+
+        "error" => {
+            let status_u16 = h_cfg.details.get("status_code").and_then(|v| v.as_u64()).unwrap_or(500) as u16;
+            let status = StatusCode::from_u16(status_u16).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+            let message = h_cfg.details.get("error").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            Ok(Arc::new(crate::flow::ErrorHandler::new(status, message)))
         }
 
         other => {
