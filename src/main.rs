@@ -1,11 +1,15 @@
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use clap::{Parser, Subcommand};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
-use raddy_caddyfile::adapt_caddyfile_from_file;
-use raddy_core::module::ModuleRegistry;
+
+mod commands;
 
 #[derive(Parser, Debug)]
-#[command(name = "raddy", version, about = "Raddy - Fast, extensible web server in Rust (Caddy compatible)")]
+#[command(
+    name = "raddy",
+    version,
+    about = "Raddy - Fast, extensible web server in Rust (Caddy compatible)"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -13,29 +17,53 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Commands {
-    /// Adapts a Caddyfile to Raddy internal JSON configuration (like caddy adapt)
-    Adapt {
-        /// Path to the Caddyfile
-        #[arg(short, long, default_value = "Caddyfile")]
-        config: PathBuf,
-
-        /// Format output with nice indentation
-        #[arg(short, long, default_value_t = true)]
-        pretty: bool,
-    },
-
-    /// Validates a Caddyfile without starting the server
-    Validate {
-        /// Path to the Caddyfile
-        #[arg(short, long, default_value = "Caddyfile")]
-        config: PathBuf,
-    },
-
     /// Runs Raddy with the specified configuration file
     Run {
         /// Path to the Caddyfile or JSON config
         #[arg(short, long, default_value = "Caddyfile")]
         config: PathBuf,
+
+        /// Configuration adapter to use (caddyfile, json)
+        #[arg(long)]
+        adapter: Option<String>,
+
+        /// Path to file where the process ID will be stored
+        #[arg(short, long)]
+        pidfile: Option<PathBuf>,
+
+        /// Automatically reload configuration when file changes on disk
+        #[arg(short, long)]
+        watch: bool,
+
+        /// Print the runtime environment variables on startup
+        #[arg(short, long)]
+        environ: bool,
+    },
+
+    /// Starts Raddy in the background (daemon mode)
+    Start {
+        /// Path to the Caddyfile or JSON config
+        #[arg(short, long, default_value = "Caddyfile")]
+        config: PathBuf,
+
+        /// Configuration adapter to use (caddyfile, json)
+        #[arg(long)]
+        adapter: Option<String>,
+
+        /// Path to file where the process ID will be stored
+        #[arg(short, long)]
+        pidfile: Option<PathBuf>,
+
+        /// Automatically reload configuration when file changes on disk
+        #[arg(short, long)]
+        watch: bool,
+    },
+
+    /// Stops a running Raddy instance via Admin API
+    Stop {
+        /// Admin API address
+        #[arg(short, long, default_value = "http://127.0.0.1:2019")]
+        address: String,
     },
 
     /// Sends a configuration reload request to a running Raddy instance via Admin API
@@ -44,23 +72,92 @@ enum Commands {
         #[arg(short, long, default_value = "Caddyfile")]
         config: PathBuf,
 
+        /// Configuration adapter to use (caddyfile, json)
+        #[arg(long)]
+        adapter: Option<String>,
+
         /// Admin API address
-        #[arg(short, long, default_value = "http://127.0.0.1:2019")]
+        #[arg(long, default_value = "http://127.0.0.1:2019")]
         address: String,
+
+        /// Force reload even if configuration appears identical
+        #[arg(short, long)]
+        force: bool,
     },
 
-    /// Sends a stop request to a running Raddy instance via Admin API
-    Stop {
-        /// Admin API address
-        #[arg(short, long, default_value = "http://127.0.0.1:2019")]
-        address: String,
+    /// Validates a Caddyfile or JSON configuration without starting the server
+    Validate {
+        /// Path to the Caddyfile or JSON config
+        #[arg(short, long, default_value = "Caddyfile")]
+        config: PathBuf,
+
+        /// Configuration adapter to use (caddyfile, json)
+        #[arg(long)]
+        adapter: Option<String>,
     },
 
-    /// Formats or inspects a Caddyfile
+    /// Adapts a Caddyfile to Raddy internal JSON configuration (like caddy adapt)
+    Adapt {
+        /// Path to the Caddyfile
+        #[arg(short, long, default_value = "Caddyfile")]
+        config: PathBuf,
+
+        /// Configuration adapter to use (caddyfile, json)
+        #[arg(long)]
+        adapter: Option<String>,
+
+        /// Format output with nice indentation
+        #[arg(short, long, default_value_t = true)]
+        pretty: bool,
+
+        /// Validate configuration along with adaptation
+        #[arg(short, long)]
+        validate: bool,
+    },
+
+    /// Formats or normalizes a Caddyfile to canonical syntax
     Fmt {
         /// Path to the Caddyfile
         #[arg(short, long, default_value = "Caddyfile")]
         config: PathBuf,
+
+        /// Overwrite original file in-place
+        #[arg(short, long)]
+        overwrite: bool,
+    },
+
+    /// Lists all installed and registered modules and directives
+    #[command(name = "list-modules")]
+    ListModules {
+        /// Output module list in JSON format
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Prints runtime environment information
+    Environ,
+
+    /// Prints detailed version information
+    Version,
+
+    /// Instant zero-config static file server
+    #[command(name = "file-server")]
+    FileServer {
+        /// Address to listen on
+        #[arg(short, long, default_value = "127.0.0.1:8000")]
+        listen: String,
+
+        /// Root directory to serve
+        #[arg(short, long, default_value = ".")]
+        root: PathBuf,
+
+        /// Enable directory browsing
+        #[arg(short, long)]
+        browse: bool,
+
+        /// Enable request access logging
+        #[arg(short, long)]
+        access_log: bool,
     },
 }
 
@@ -74,150 +171,94 @@ async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Adapt { config, pretty } => {
-            let internal_config = load_or_adapt(&config)?;
-            let json = if pretty {
-                serde_json::to_string_pretty(&internal_config)?
-            } else {
-                serde_json::to_string(&internal_config)?
-            };
-            println!("{}", json);
+        Commands::Run {
+            config,
+            adapter,
+            pidfile,
+            watch,
+            environ,
+        } => {
+            commands::run::run_command(
+                &config,
+                adapter.as_deref(),
+                pidfile.as_deref(),
+                watch,
+                environ,
+            )
+            .await?;
         }
 
-        Commands::Validate { config } => {
-            let internal_config = load_or_adapt(&config)?;
-            let http_app = internal_config.http_app();
-            let server_count = http_app.as_ref().map(|a| a.servers.len()).unwrap_or(0);
-            println!(
-                "Valid configuration: {} server(s) configured.",
-                server_count
-            );
-        }
-
-        Commands::Run { config } => {
-            let internal_config = load_or_adapt(&config)?;
-            let registry = std::sync::Arc::new(ModuleRegistry::new());
-
-            let admin_listen = internal_config.admin.as_ref()
-                .and_then(|a| a.listen.clone())
-                .unwrap_or_else(|| "127.0.0.1:2019".into());
-            let admin_disabled = internal_config.admin.as_ref()
-                .and_then(|a| a.disabled)
-                .unwrap_or(false);
-
-            tracing::info!("Raddy server initializing...");
-            let tls_manager = std::sync::Arc::new(raddy_tls::TlsManager::new(None, true)?);
-            let state = std::sync::Arc::new(raddy_admin::AppState::new(
-                internal_config.clone(),
-                registry,
-                Some(tls_manager),
-            ));
-
-            // Start HTTP/HTTPS servers
-            state.reload(internal_config).await?;
-
-            let (admin_shutdown_tx, admin_shutdown_rx) = tokio::sync::watch::channel(false);
-            let admin_task = if !admin_disabled {
-                let mut admin_server = raddy_admin::AdminServer::new(admin_listen, state.clone());
-                match admin_server.bind().await {
-                    Ok(_) => {
-                        let rx = admin_shutdown_rx.clone();
-                        Some(tokio::spawn(async move {
-                            if let Err(e) = admin_server.run(rx).await {
-                                tracing::warn!("Admin server error: {}", e);
-                            }
-                        }))
-                    }
-                    Err(e) => {
-                        tracing::warn!("Failed to bind Admin API: {}. Running without Admin API.", e);
-                        None
-                    }
-                }
-            } else {
-                None
-            };
-
-            tracing::info!("Raddy server running. Press Ctrl+C to stop.");
-
-            tokio::select! {
-                _ = tokio::signal::ctrl_c() => {
-                    tracing::info!("Received interrupt signal, initiating graceful shutdown...");
-                }
-            }
-
-            let _ = admin_shutdown_tx.send(true);
-            state.stop_all();
-
-            if let Some(task) = admin_task {
-                let _ = task.await;
-            }
-
-            tracing::info!("Raddy server stopped.");
-        }
-
-        Commands::Reload { config, address } => {
-            let content = std::fs::read_to_string(&config)?;
-            let is_json = config.extension().and_then(|e| e.to_str()) == Some("json");
-            let content_type = if is_json { "application/json" } else { "text/caddyfile" };
-
-            let client = reqwest::Client::new();
-            let url = format!("{}/load", address.trim_end_matches('/'));
-            tracing::info!("Sending reload request to {}...", url);
-
-            let resp = client.post(&url)
-                .header("content-type", content_type)
-                .body(content)
-                .send()
-                .await?;
-
-            if resp.status().is_success() {
-                println!("Successfully reloaded configuration via Admin API.");
-            } else {
-                let err_text = resp.text().await?;
-                eprintln!("Failed to reload configuration: {}", err_text);
-                std::process::exit(1);
-            }
+        Commands::Start {
+            config,
+            adapter,
+            pidfile,
+            watch,
+        } => {
+            commands::daemon::start_command(
+                &config,
+                adapter.as_deref(),
+                pidfile.as_deref(),
+                watch,
+            )
+            .await?;
         }
 
         Commands::Stop { address } => {
-            let client = reqwest::Client::new();
-            let url = format!("{}/stop", address.trim_end_matches('/'));
-            tracing::info!("Sending stop request to {}...", url);
-
-            let resp = client.post(&url).send().await?;
-            if resp.status().is_success() {
-                println!("Stop signal accepted by Admin API.");
-            } else {
-                let err_text = resp.text().await?;
-                eprintln!("Failed to stop server: {}", err_text);
-                std::process::exit(1);
-            }
+            commands::daemon::stop_command(&address).await?;
         }
 
-        Commands::Fmt { config } => {
-            let content = std::fs::read_to_string(&config)?;
-            let ast = raddy_caddyfile::parse_caddyfile(&content)?;
-            println!("Successfully parsed Caddyfile AST with {} site block(s)", ast.site_blocks.len());
+        Commands::Reload {
+            config,
+            adapter,
+            address,
+            force,
+        } => {
+            commands::reload::reload_command(&config, adapter.as_deref(), &address, force).await?;
+        }
+
+        Commands::Validate { config, adapter } => {
+            commands::config_ops::validate_command(&config, adapter.as_deref())?;
+        }
+
+        Commands::Adapt {
+            config,
+            adapter,
+            pretty,
+            validate,
+        } => {
+            commands::config_ops::adapt_command(
+                &config,
+                adapter.as_deref(),
+                pretty,
+                validate,
+            )?;
+        }
+
+        Commands::Fmt { config, overwrite } => {
+            commands::config_ops::fmt_command(&config, overwrite)?;
+        }
+
+        Commands::ListModules { json } => {
+            commands::info::list_modules(json);
+        }
+
+        Commands::Environ => {
+            commands::info::print_environ();
+        }
+
+        Commands::Version => {
+            commands::info::print_version();
+        }
+
+        Commands::FileServer {
+            listen,
+            root,
+            browse,
+            access_log,
+        } => {
+            commands::run::file_server_command(&listen, &root, browse, access_log).await?;
         }
     }
 
     Ok(())
-}
-
-fn load_or_adapt(path: &Path) -> anyhow::Result<raddy_core::Config> {
-    if !path.exists() {
-        anyhow::bail!("Configuration file not found: {}", path.display());
-    }
-
-    // If file ends with .json, parse directly
-    if path.extension().and_then(|ext| ext.to_str()) == Some("json") {
-        let content = std::fs::read_to_string(path)?;
-        let config: raddy_core::Config = serde_json::from_str(&content)?;
-        return Ok(config);
-    }
-
-    // Otherwise adapt from Caddyfile
-    let config = adapt_caddyfile_from_file(path)
-        .map_err(|e| anyhow::anyhow!("Caddyfile adaptation error: {}", e))?;
-    Ok(config)
 }

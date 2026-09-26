@@ -16,6 +16,7 @@ pub struct AppState {
     pub tls_manager: Option<Arc<TlsManager>>,
     pub active_shutdown: Arc<Mutex<Option<watch::Sender<bool>>>>,
     pub admin_shutdown: Arc<Mutex<Option<watch::Sender<bool>>>>,
+    pub exit_notify: Arc<tokio::sync::Notify>,
 }
 
 impl AppState {
@@ -30,6 +31,7 @@ impl AppState {
             tls_manager,
             active_shutdown: Arc::new(Mutex::new(None)),
             admin_shutdown: Arc::new(Mutex::new(None)),
+            exit_notify: Arc::new(tokio::sync::Notify::new()),
         }
     }
 
@@ -88,5 +90,6 @@ impl AppState {
             let _ = tx.send(true);
             tracing::info!("Shutdown signal sent to admin server");
         }
+        self.exit_notify.notify_waiters();
     }
 }
