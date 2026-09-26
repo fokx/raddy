@@ -53,6 +53,8 @@ impl AppState {
         // Attempt binding first. If this fails, the old server continues serving without interruption.
         server_manager.bind_all().await.map_err(AdminError::HttpServer)?;
 
+        let pending_acme = server_manager.pending_acme().to_vec();
+
         // Gracefully drain existing servers
         {
             let mut lock = self.active_shutdown.lock();
@@ -69,6 +71,36 @@ impl AppState {
         self.config.store(Arc::new(new_config));
         tokio::task::yield_now().await;
         tracing::info!("Configuration successfully reloaded and swapped");
+
+        // Now that port 80 & 443 listeners are bound and running,
+        // provision any pending public ACME certificates.
+        if let Some(ref tls) = self.tls_manager {
+            if !pending_acme.is_empty() {
+                for h in pending_acme {
+                    let tls_clone = tls.clone();
+                    let h_clone = h.clone();
+                    match tokio::time::timeout(
+                        std::time::Duration::from_secs(15),
+                        tls.provision_identifier(&h, false),
+                    ).await {
+                        Ok(Ok(())) => {
+                            tracing::info!("ACME certificate ready for '{}'", h_clone);
+                        }
+                        Ok(Err(e)) => {
+                            tracing::warn!("Failed to auto-provision ACME cert for '{}': {}", h_clone, e);
+                        }
+                        Err(_) => {
+                            tracing::info!("ACME provisioning for '{}' continuing in background...", h_clone);
+                            tokio::spawn(async move {
+                                if let Err(e) = tls_clone.provision_identifier(&h_clone, false).await {
+                                    tracing::warn!("Failed to auto-provision ACME cert for '{}': {}", h_clone, e);
+                                }
+                            });
+                        }
+                    }
+                }
+            }
+        }
 
         Ok(())
     }

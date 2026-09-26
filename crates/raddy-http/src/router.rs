@@ -477,9 +477,24 @@ fn compile_handler(h_cfg: &HandlerConfig, registry: &ModuleRegistry) -> Result<A
             Ok(Arc::new(crate::flow::ErrorHandler::new(status, message)))
         }
 
+        "log_skip" | "log_append" => {
+            Ok(Arc::new(NoopHandler))
+        }
+
         other => {
             // Attempt to resolve through dynamic module registry
             registry.create_handler(other, serde_json::to_value(&h_cfg.details)?)
         }
     }
 }
+
+#[derive(Debug, Clone)]
+pub struct NoopHandler;
+
+#[async_trait]
+impl Handler for NoopHandler {
+    async fn handle(&self, _ctx: &mut Context) -> Result<()> {
+        Ok(())
+    }
+}
+

@@ -23,6 +23,7 @@ pub struct HttpServerInstance {
     pub quic_endpoint: Option<quinn::Endpoint>,
     pub protocols: Vec<String>,
     pub alt_svc_port: Option<u16>,
+    pub challenge_store: Option<raddy_tls::acme::Http01ChallengeStore>,
     listener: Option<TcpListener>,
     local_addr: Option<SocketAddr>,
 }
@@ -38,9 +39,15 @@ impl HttpServerInstance {
             quic_endpoint: None,
             protocols: vec!["h1".into(), "h2".into(), "h3".into()],
             alt_svc_port: None,
+            challenge_store: None,
             listener: None,
             local_addr: None,
         }
+    }
+
+    pub fn with_challenge_store(mut self, store: raddy_tls::acme::Http01ChallengeStore) -> Self {
+        self.challenge_store = Some(store);
+        self
     }
 
     pub fn with_tls_acceptor(mut self, acceptor: TlsAcceptor) -> Self {
@@ -128,6 +135,7 @@ impl HttpServerInstance {
 
         let router = self.router.clone();
         let tls_acceptor = self.tls_acceptor.clone();
+        let challenge_store = self.challenge_store.clone();
         let auto_builder = Builder::new(TokioExecutor::new());
         let alt_svc_port = self.alt_svc_port;
         let quic_endpoint = self.quic_endpoint;
@@ -140,6 +148,7 @@ impl HttpServerInstance {
                             let router_clone = router.clone();
                             let builder = auto_builder.clone();
                             let acceptor_opt = tls_acceptor.clone();
+                            let challenge_store_clone = challenge_store.clone();
                             let mut conn_shutdown_rx = shutdown_rx.clone();
 
                             tokio::spawn(async move {
@@ -153,10 +162,12 @@ impl HttpServerInstance {
                                         }
                                     };
                                     let io = TokioIo::new(tls_stream);
+                                    let cstore = challenge_store_clone.clone();
                                     let service = hyper::service::service_fn(move |req| {
                                         let r = router_clone.clone();
+                                        let cs = cstore.clone();
                                         async move {
-                                            handle_request(req, Some(remote_addr), r, alt_svc_port).await
+                                            handle_request(req, Some(remote_addr), r, alt_svc_port, cs).await
                                         }
                                     });
 
@@ -176,10 +187,12 @@ impl HttpServerInstance {
                                 } else {
                                     // Cleartext HTTP (HTTP/1.1 or HTTP/2 cleartext)
                                     let io = TokioIo::new(tcp_stream);
+                                    let cstore = challenge_store_clone.clone();
                                     let service = hyper::service::service_fn(move |req| {
                                         let r = router_clone.clone();
+                                        let cs = cstore.clone();
                                         async move {
-                                            handle_request(req, Some(remote_addr), r, None).await
+                                            handle_request(req, Some(remote_addr), r, None, cs).await
                                         }
                                     });
 
@@ -249,6 +262,7 @@ pub struct ServerManager {
     servers: Vec<HttpServerInstance>,
     shutdown_tx: watch::Sender<bool>,
     tls_manager: Option<Arc<TlsManager>>,
+    pending_acme: Vec<String>,
 }
 
 impl ServerManager {
@@ -259,6 +273,7 @@ impl ServerManager {
     ) -> Result<Self> {
         let (shutdown_tx, _) = watch::channel(false);
         let mut servers = Vec::new();
+        let mut pending_acme = Vec::new();
 
         if let Some(http) = config.http_app() {
             for (name, srv_cfg) in &http.servers {
@@ -268,6 +283,10 @@ impl ServerManager {
                 let protocols = srv_cfg.protocols.clone().unwrap_or_else(|| vec!["h1".into(), "h2".into(), "h3".into()]);
 
                 let mut instance = HttpServerInstance::new(name, listen_addr, vhost_router).with_protocols(protocols);
+
+                if let Some(ref tls) = tls_manager {
+                    instance = instance.with_challenge_store(tls.challenge_store());
+                }
 
                 if is_tls {
                     if let Some(ref tls) = tls_manager {
@@ -290,8 +309,19 @@ impl ServerManager {
                                                      }))
                                                     .unwrap_or(false);
 
-                                                if let Err(e) = tls.provision_identifier(h, force_internal).await {
-                                                    tracing::warn!("Failed to auto-provision cert for '{}': {}", h, e);
+                                                if force_internal || raddy_tls::manager::is_local_or_private(h) {
+                                                    if let Err(e) = tls.provision_identifier(h, true).await {
+                                                        tracing::warn!("Failed to auto-provision internal cert for '{}': {}", h, e);
+                                                    }
+                                                } else if tls.cert_exists(h).await {
+                                                    if let Err(e) = tls.provision_identifier(h, false).await {
+                                                        tracing::warn!("Failed to load cached cert for '{}': {}", h, e);
+                                                    }
+                                                } else {
+                                                    // Queue for ACME provisioning once listeners are bound and running!
+                                                    if !pending_acme.contains(h) {
+                                                        pending_acme.push(h.clone());
+                                                    }
                                                 }
                                             }
                                         }
@@ -321,6 +351,7 @@ impl ServerManager {
             servers,
             shutdown_tx,
             tls_manager,
+            pending_acme,
         })
     }
 
@@ -378,5 +409,19 @@ impl ServerManager {
     pub fn trigger_shutdown(&self) {
         let _ = self.shutdown_tx.send(true);
     }
+
+    pub fn pending_acme(&self) -> &[String] {
+        &self.pending_acme
+    }
+
+    pub async fn provision_pending_acme(&self, tls: &Arc<TlsManager>) -> Result<()> {
+        for identifier in &self.pending_acme {
+            if let Err(e) = tls.provision_identifier(identifier, false).await {
+                tracing::warn!("Failed to auto-provision ACME certificate for '{}': {}", identifier, e);
+            }
+        }
+        Ok(())
+    }
 }
+
 

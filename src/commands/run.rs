@@ -84,7 +84,26 @@ async fn run_server_loop(
         .unwrap_or(false);
 
     tracing::info!("Raddy server initializing...");
-    let tls_manager = Arc::new(TlsManager::new(None, true)?);
+    let (email, ca_url, staging) = if let Some(tls) = initial_config.tls_app() {
+        let is_staging = tls.staging.unwrap_or(false)
+            || tls.acme_ca.as_deref().map(|ca| ca.contains("staging")).unwrap_or(false);
+        (tls.email, tls.acme_ca, is_staging)
+    } else {
+        let is_staging = std::env::var("RADDY_ACME_STAGING")
+            .map(|v| v == "1" || v == "true")
+            .unwrap_or(false);
+        (
+            std::env::var("RADDY_ACME_EMAIL").ok(),
+            std::env::var("RADDY_ACME_CA").ok(),
+            is_staging,
+        )
+    };
+
+    let tls_manager = if let Some(ref ca) = ca_url {
+        Arc::new(TlsManager::new_with_ca(email, ca.clone())?)
+    } else {
+        Arc::new(TlsManager::new(email, staging)?)
+    };
     let state = Arc::new(AdminAppState::new(
         initial_config.clone(),
         registry,

@@ -15,8 +15,27 @@ pub async fn handle_request(
     remote_addr: Option<SocketAddr>,
     router: Arc<VirtualHostRouter>,
     alt_svc_port: Option<u16>,
+    challenge_store: Option<raddy_tls::acme::Http01ChallengeStore>,
 ) -> std::result::Result<Response<Full<Bytes>>, std::convert::Infallible> {
     let (parts, incoming_body) = req.into_parts();
+
+    // Intercept ACME HTTP-01 challenge if present
+    if parts.uri.path().starts_with("/.well-known/acme-challenge/") {
+        if let Some(ref store) = challenge_store {
+            let token = parts.uri.path().trim_start_matches("/.well-known/acme-challenge/");
+            if let Some(key_auth) = store.get(token) {
+                tracing::info!("Responding to ACME HTTP-01 challenge for token '{}'", token);
+                let resp = Response::builder()
+                    .status(StatusCode::OK)
+                    .header(http::header::CONTENT_TYPE, "text/plain")
+                    .body(Full::new(Bytes::from(key_auth)))
+                    .unwrap();
+                return Ok(resp);
+            } else {
+                tracing::warn!("ACME HTTP-01 challenge token '{}' not found in store", token);
+            }
+        }
+    }
 
     // Read full incoming request body
     let body_bytes = match incoming_body.collect().await {

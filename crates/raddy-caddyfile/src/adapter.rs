@@ -48,7 +48,11 @@ pub struct Adapter {
     auto_https: Option<AutoHttpsConfig>,
     admin: Option<AdminConfig>,
     logging: Option<LoggingConfig>,
+    email: Option<String>,
+    acme_ca: Option<String>,
+    staging: Option<bool>,
     custom_order: HashMap<String, usize>,
+    site_log_counter: usize,
 }
 
 impl Default for Adapter {
@@ -70,7 +74,11 @@ impl Adapter {
             auto_https: None,
             admin: None,
             logging: None,
+            email: None,
+            acme_ca: None,
+            staging: None,
             custom_order,
+            site_log_counter: 0,
         }
     }
 
@@ -83,7 +91,6 @@ impl Adapter {
 
         let mut config = Config::new();
         config.admin = self.admin.clone();
-        config.logging = self.logging.clone();
 
         let mut servers: HashMap<String, HttpServer> = HashMap::new();
 
@@ -92,11 +99,29 @@ impl Adapter {
             self.adapt_site_block(site, &mut servers)?;
         }
 
+        config.logging = self.logging.clone();
+
+        // 3. Automatic HTTPS: generate port 80 server for HTTP->HTTPS redirects and ACME HTTP-01 challenges
+        let auto_https_disabled = self.auto_https.as_ref().and_then(|a| a.disabled).unwrap_or(false);
+        if !auto_https_disabled {
+            self.setup_automatic_https(&mut servers);
+        }
+
         let http_app = HttpApp { servers };
         config.set_http_app(http_app).map_err(|e| ParseError::Adaptation {
             line: 1,
             message: format!("Failed to serialize HTTP app: {}", e),
         })?;
+
+        if self.email.is_some() || self.acme_ca.is_some() || self.staging.is_some() {
+            let tls_app = TlsApp {
+                email: self.email.clone(),
+                acme_ca: self.acme_ca.clone(),
+                staging: self.staging,
+                extra: HashMap::new(),
+            };
+            let _ = config.set_tls_app(tls_app);
+        }
 
         Ok(config)
     }
@@ -163,6 +188,26 @@ impl Adapter {
                         }
                     }
                 }
+                "email" => {
+                    self.email = opt.args.first().cloned();
+                }
+                "acme_ca" => {
+                    self.acme_ca = opt.args.first().cloned();
+                }
+                "local_certs" => {
+                    self.staging = Some(false);
+                }
+                "debug" => {
+                    let logging = self.logging.get_or_insert_with(LoggingConfig::default);
+                    let default_log = logging.logs.entry("default".to_string()).or_default();
+                    default_log.level = Some("DEBUG".to_string());
+                }
+                "log" => {
+                    let log_name = opt.args.first().cloned().unwrap_or_else(|| "default".to_string());
+                    let log_cfg = parse_log_directive(opt, &log_name)?;
+                    let logging = self.logging.get_or_insert_with(LoggingConfig::default);
+                    logging.logs.insert(log_name, log_cfg);
+                }
                 _ => {}
             }
         }
@@ -170,7 +215,7 @@ impl Adapter {
     }
 
     fn adapt_site_block(
-        &self,
+        &mut self,
         site: &SiteBlockNode,
         servers: &mut HashMap<String, HttpServer>,
     ) -> ParseResult<()> {
@@ -178,6 +223,7 @@ impl Adapter {
         let mut named_matchers: HashMap<String, MatcherSet> = HashMap::new();
         let mut regular_directives: Vec<DirectiveNode> = Vec::new();
         let mut site_tls_policy: Option<TlsConnectionPolicy> = None;
+        let mut site_log_dir: Option<DirectiveNode> = None;
 
         for dir in &site.directives {
             if dir.name.starts_with('@') {
@@ -186,10 +232,29 @@ impl Adapter {
                 named_matchers.insert(name, matcher_set);
             } else if dir.name == "tls" {
                 site_tls_policy = Some(parse_tls_directive(dir)?);
+            } else if dir.name == "log" {
+                site_log_dir = Some(dir.clone());
             } else {
                 regular_directives.push(dir.clone());
             }
         }
+
+        // Process site log directive if present
+        let site_logger_name = if let Some(ref log_node) = site_log_dir {
+            let name = if let Some(first) = log_node.args.first() {
+                first.clone()
+            } else {
+                let generated = format!("log{}", self.site_log_counter);
+                self.site_log_counter += 1;
+                generated
+            };
+            let log_cfg = parse_log_directive(log_node, &name)?;
+            let logging = self.logging.get_or_insert_with(LoggingConfig::default);
+            logging.logs.insert(name.clone(), log_cfg);
+            Some(name)
+        } else {
+            None
+        };
 
         // Sort directives by priority table
         regular_directives.sort_by_key(|dir| {
@@ -209,6 +274,15 @@ impl Adapter {
                 protocols: None,
                 logs: None,
             });
+
+            if let Some(ref log_name) = site_logger_name {
+                let srv_logs = server.logs.get_or_insert_with(ServerLogConfig::default);
+                if srv_logs.default_logger_name.is_none() {
+                    srv_logs.default_logger_name = Some(log_name.clone());
+                }
+                let names = srv_logs.logger_names.get_or_insert_with(HashMap::new);
+                names.insert(parsed_addr.host.clone(), log_name.clone());
+            }
 
             if let Some(ref tls_pol) = site_tls_policy {
                 let mut pol_clone = tls_pol.clone();
@@ -539,6 +613,31 @@ impl Adapter {
                 }
             }
 
+            "handle_path" => {
+                let prefix = dir.matcher.as_deref().or_else(|| dir.args.first().map(|s| s.as_str())).unwrap_or("");
+                let clean_prefix = prefix.trim_end_matches('*');
+                let mut sub_routes = Vec::new();
+                if !clean_prefix.is_empty() {
+                    let rewrite_cfg = HandlerConfig::new("rewrite").with_field("strip_path_prefix", clean_prefix);
+                    let mut r = Route::default();
+                    r.handle = vec![rewrite_cfg];
+                    sub_routes.push(r);
+                }
+                if let Some(ref block) = dir.block {
+                    for sub in block {
+                        let r = self.adapt_directive(sub, &[], None, &HashMap::new())?;
+                        sub_routes.push(r);
+                    }
+                }
+                let cfg = HandlerConfig::new("subroute").with_field("routes", sub_routes);
+                configs.push(cfg);
+            }
+
+            "log_skip" | "log_append" => {
+                let cfg = HandlerConfig::new(dir.name.as_str());
+                configs.push(cfg);
+            }
+
             "templates" => {
                 let cfg = HandlerConfig::new("templates");
                 configs.push(cfg);
@@ -674,6 +773,178 @@ impl Adapter {
 
         Ok(configs)
     }
+
+    fn setup_automatic_https(&self, servers: &mut HashMap<String, HttpServer>) {
+        let https_port_str = format!(":{}", self.https_port);
+        let http_port_str = format!(":{}", self.http_port);
+        let http_server_key = format!("srv_{}", http_port_str);
+
+        // Find hosts served on HTTPS
+        let mut https_hosts = Vec::new();
+        for srv in servers.values() {
+            let is_https = srv.listen.iter().any(|l| l.ends_with(&https_port_str))
+                || srv.tls_connection_policies.is_some();
+            if is_https {
+                for route in &srv.routes {
+                    if let Some(ref matchers) = route.r#match {
+                        for m in matchers {
+                            if let Some(ref hosts) = m.host {
+                                for h in hosts {
+                                    if h != "*" && !https_hosts.contains(h) {
+                                        https_hosts.push(h.clone());
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if https_hosts.is_empty() {
+            return;
+        }
+
+        let disable_redirects = self
+            .auto_https
+            .as_ref()
+            .and_then(|a| a.disable_redirects)
+            .unwrap_or(false);
+
+        let http_server = servers.entry(http_server_key).or_insert_with(|| HttpServer {
+            listen: vec![http_port_str],
+            routes: Vec::new(),
+            tls_connection_policies: None,
+            automatic_https: self.auto_https.clone(),
+            protocols: None,
+            logs: None,
+        });
+
+        if !disable_redirects {
+            for host in https_hosts {
+                let host_already_has_route = http_server.routes.iter().any(|r| {
+                    r.r#match
+                        .as_ref()
+                        .map(|ms| {
+                            ms.iter().any(|m| {
+                                m.host
+                                    .as_ref()
+                                    .map(|hs| hs.contains(&host))
+                                    .unwrap_or(false)
+                            })
+                        })
+                        .unwrap_or(false)
+                });
+
+                if !host_already_has_route {
+                    let mut redir_route = Route::default();
+                    redir_route.r#match = Some(vec![MatcherSet {
+                        host: Some(vec![host.clone()]),
+                        ..Default::default()
+                    }]);
+                    let redir_cfg = HandlerConfig::new("static_response")
+                        .with_field("status_code", 308)
+                        .with_field("location", "https://{host}{uri}");
+                    redir_route.handle = vec![redir_cfg];
+                    http_server.routes.push(redir_route);
+                }
+            }
+        }
+    }
+}
+
+fn parse_log_directive(dir: &DirectiveNode, logger_name: &str) -> ParseResult<LogConfig> {
+    let mut writer = None;
+    let mut encoder = None;
+    let mut level = Some("INFO".to_string());
+    let mut include = vec![format!("http.log.access.{}", logger_name)];
+    let mut exclude = Vec::new();
+
+    if let Some(ref block) = dir.block {
+        for sub in block {
+            match sub.name.as_str() {
+                "output" => {
+                    if let Some(wtype) = sub.args.first() {
+                        match wtype.as_str() {
+                            "file" => {
+                                let filename = sub.args.get(1).cloned().unwrap_or_else(|| "access.log".into());
+                                let mut obj = serde_json::json!({
+                                    "output": "file",
+                                    "filename": filename,
+                                });
+                                if let Some(ref file_block) = sub.block {
+                                    for opt in file_block {
+                                        if let Some(val) = opt.args.first() {
+                                            obj[opt.name.clone()] = serde_json::json!(val);
+                                        }
+                                    }
+                                }
+                                writer = Some(obj);
+                            }
+                            "stdout" => {
+                                writer = Some(serde_json::json!({ "output": "stdout" }));
+                            }
+                            "stderr" => {
+                                writer = Some(serde_json::json!({ "output": "stderr" }));
+                            }
+                            "discard" => {
+                                writer = Some(serde_json::json!({ "output": "discard" }));
+                            }
+                            "net" => {
+                                let addr = sub.args.get(1).cloned().unwrap_or_default();
+                                writer = Some(serde_json::json!({ "output": "net", "address": addr }));
+                            }
+                            _ => {
+                                writer = Some(serde_json::json!({ "output": wtype }));
+                            }
+                        }
+                    }
+                }
+                "format" => {
+                    if let Some(ftype) = sub.args.first() {
+                        match ftype.as_str() {
+                            "json" => {
+                                encoder = Some(serde_json::json!({ "format": "json" }));
+                            }
+                            "console" => {
+                                encoder = Some(serde_json::json!({ "format": "console" }));
+                            }
+                            other => {
+                                encoder = Some(serde_json::json!({ "format": other }));
+                            }
+                        }
+                    }
+                }
+                "level" => {
+                    if let Some(lvl) = sub.args.first() {
+                        level = Some(lvl.to_uppercase());
+                    }
+                }
+                "include" => {
+                    include = sub.args.clone();
+                }
+                "exclude" => {
+                    exclude = sub.args.clone();
+                }
+                _ => {}
+            }
+        }
+    }
+
+    if writer.is_none() {
+        writer = Some(serde_json::json!({ "output": "stdout" }));
+    }
+    if encoder.is_none() {
+        encoder = Some(serde_json::json!({ "format": "console" }));
+    }
+
+    Ok(LogConfig {
+        writer,
+        encoder,
+        level,
+        include,
+        exclude,
+    })
 }
 
 fn json_upstream(addr: &str) -> serde_json::Value {
@@ -800,6 +1071,14 @@ fn parse_tls_directive(dir: &DirectiveNode) -> ParseResult<TlsConnectionPolicy> 
                 all_tags: None,
                 serial_number: None,
             });
+        } else if dir.args.len() >= 2 {
+            let cert_file = first.clone();
+            let key_file = dir.args[1].clone();
+            policy.certificate_selection = Some(CertificateSelection {
+                any_tag: Some(vec![format!("custom:{}:{}", cert_file, key_file)]),
+                all_tags: None,
+                serial_number: None,
+            });
         }
     }
 
@@ -904,5 +1183,45 @@ example.com {
         let srv = http.servers.get("srv_:443").unwrap();
         // file_server has higher priority (runs earlier or later depending on order)
         assert_eq!(srv.routes.len(), 2);
+    }
+
+    #[test]
+    fn test_adapt_site_with_log_and_auto_https() {
+        let input = r#"
+hkg.eeeu.de {
+    respond "OK" 200
+    log {
+        output file /var/log/caddy/hkghhh
+    }
+}
+"#;
+        let tokens = Lexer::new(input).tokenize().unwrap();
+        let caddyfile = Parser::new(tokens).parse().unwrap();
+        let mut adapter = Adapter::new();
+        let config = adapter.adapt(&caddyfile).unwrap();
+
+        // 1. Verify logging configuration
+        let logging = config.logging.as_ref().unwrap();
+        let log0 = logging.logs.get("log0").unwrap();
+        assert_eq!(
+            log0.writer,
+            Some(serde_json::json!({ "output": "file", "filename": "/var/log/caddy/hkghhh" }))
+        );
+
+        // 2. Verify HTTPS server and ServerLogConfig
+        let http = config.http_app().unwrap();
+        let srv_https = http.servers.get("srv_:443").unwrap();
+        assert_eq!(srv_https.routes.len(), 1);
+        assert_eq!(srv_https.routes[0].handle[0].handler, "static_response");
+        let srv_logs = srv_https.logs.as_ref().unwrap();
+        assert_eq!(srv_logs.default_logger_name.as_deref(), Some("log0"));
+        assert_eq!(srv_logs.logger_names.as_ref().unwrap().get("hkg.eeeu.de"), Some(&"log0".to_string()));
+
+        // 3. Verify automatic HTTP server on port 80 with redirect
+        let srv_http = http.servers.get("srv_:80").unwrap();
+        assert_eq!(srv_http.routes.len(), 1);
+        assert_eq!(srv_http.routes[0].handle[0].handler, "static_response");
+        assert_eq!(srv_http.routes[0].handle[0].details.get("status_code"), Some(&serde_json::json!(308)));
+        assert_eq!(srv_http.routes[0].handle[0].details.get("location"), Some(&serde_json::json!("https://{host}{uri}")));
     }
 }

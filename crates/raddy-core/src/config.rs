@@ -33,6 +33,18 @@ impl Config {
         self.apps.insert("http".to_string(), val);
         Ok(())
     }
+
+    pub fn tls_app(&self) -> Option<TlsApp> {
+        self.apps
+            .get("tls")
+            .and_then(|v| serde_json::from_value(v.clone()).ok())
+    }
+
+    pub fn set_tls_app(&mut self, app: TlsApp) -> Result<(), serde_json::Error> {
+        let val = serde_json::to_value(app)?;
+        self.apps.insert("tls".to_string(), val);
+        Ok(())
+    }
 }
 
 /// Admin API server configuration.
@@ -262,4 +274,20 @@ pub struct AutoHttpsConfig {
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub skip_certificates: Option<Vec<String>>,
+}
+
+/// Global TLS application configuration.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct TlsApp {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub email: Option<String>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub acme_ca: Option<String>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub staging: Option<bool>,
+
+    #[serde(flatten, default, skip_serializing_if = "HashMap::is_empty")]
+    pub extra: HashMap<String, serde_json::Value>,
 }

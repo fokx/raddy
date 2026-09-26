@@ -17,20 +17,14 @@ pub struct TlsManager {
 }
 
 impl TlsManager {
-    pub fn new(email: Option<String>, staging: bool) -> Result<Self> {
+    pub fn new_with_ca(email: Option<String>, acme_url: impl Into<String>) -> Result<Self> {
         crate::install_default_crypto_provider();
 
         let local_ca = Arc::new(LocalCa::new()?);
         let storage = Arc::new(FileCertStorage::new(FileCertStorage::default_dir()));
         let challenge_store = Http01ChallengeStore::new();
 
-        let acme_url = if staging {
-            LETS_ENCRYPT_STAGING
-        } else {
-            LETS_ENCRYPT_PRODUCTION
-        };
-
-        let acme = Arc::new(AcmeClient::new(acme_url, email, challenge_store));
+        let acme = Arc::new(AcmeClient::new(acme_url.into(), email, challenge_store));
         let sni_resolver = Arc::new(SniResolver::new());
 
         Ok(Self {
@@ -41,9 +35,26 @@ impl TlsManager {
         })
     }
 
+    pub fn new(email: Option<String>, staging: bool) -> Result<Self> {
+        let acme_url = if staging {
+            LETS_ENCRYPT_STAGING
+        } else {
+            LETS_ENCRYPT_PRODUCTION
+        };
+        Self::new_with_ca(email, acme_url)
+    }
+
     pub fn with_storage(mut self, storage: Arc<dyn CertStorage>) -> Self {
         self.storage = storage;
         self
+    }
+
+    pub fn storage(&self) -> Arc<dyn CertStorage> {
+        self.storage.clone()
+    }
+
+    pub async fn cert_exists(&self, identifier: &str) -> bool {
+        self.storage.exists(identifier).await
     }
 
     pub fn sni_resolver(&self) -> Arc<SniResolver> {
