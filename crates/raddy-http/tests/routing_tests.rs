@@ -269,3 +269,146 @@ async fn test_full_tcp_server_end_to_end() {
     shutdown_tx.send(true).unwrap();
     server_handle.await.unwrap().unwrap();
 }
+
+#[tokio::test]
+async fn test_http_to_https_redirect_uri_evaluation() {
+    let mut server = HttpServer::default();
+    server.listen = vec![":80".into()];
+
+    server.routes.push(Route {
+        r#match: Some(vec![MatcherSet {
+            host: Some(vec!["hkg.eeeu.de".into()]),
+            ..Default::default()
+        }]),
+        handle: vec![HandlerConfig::new("static_response")
+            .with_field("status_code", 308)
+            .with_field("location", "https://{host}{uri}")],
+        terminal: Some(true),
+        group: None,
+    });
+
+    let registry = ModuleRegistry::new();
+    let vhost_router = compile_virtual_host_router(&server, &registry).expect("Failed to compile vhost router");
+
+    // Case 1: GET /
+    let mut headers = HeaderMap::new();
+    headers.insert(http::header::HOST, "hkg.eeeu.de".parse().unwrap());
+    let mut ctx1 = Context::new(Method::GET, Uri::from_static("/"), headers.clone(), Bytes::new());
+    vhost_router.route_request(&mut ctx1).await.unwrap();
+
+    assert_eq!(ctx1.status, Some(StatusCode::PERMANENT_REDIRECT));
+    assert_eq!(
+        ctx1.response_headers.get(http::header::LOCATION).unwrap().to_str().unwrap(),
+        "https://hkg.eeeu.de/"
+    );
+
+    // Case 2: GET /path/to/resource?foo=bar&baz=1
+    let mut ctx2 = Context::new(
+        Method::GET,
+        Uri::from_static("/path/to/resource?foo=bar&baz=1"),
+        headers,
+        Bytes::new(),
+    );
+    vhost_router.route_request(&mut ctx2).await.unwrap();
+
+    assert_eq!(ctx2.status, Some(StatusCode::PERMANENT_REDIRECT));
+    assert_eq!(
+        ctx2.response_headers.get(http::header::LOCATION).unwrap().to_str().unwrap(),
+        "https://hkg.eeeu.de/path/to/resource?foo=bar&baz=1"
+    );
+}
+
+#[tokio::test]
+async fn test_user_caddyfile_live_file_server_and_handle_path() {
+    use raddy_caddyfile::adapt_caddyfile;
+
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let temp_root = std::env::temp_dir().join(format!("raddy_test_user_cfg_{}", nanos));
+    let www_dir = temp_root.join("www");
+    let dl_dir = temp_root.join("dl");
+    tokio::fs::create_dir_all(&www_dir).await.unwrap();
+    tokio::fs::create_dir_all(&dl_dir).await.unwrap();
+
+    // Write index.html in www_dir
+    tokio::fs::write(www_dir.join("index.html"), "Welcome to laxccs.netlib.re!").await.unwrap();
+    // Write download file in dl_dir
+    tokio::fs::write(dl_dir.join("ajsdoasji"), "download payload").await.unwrap();
+    // Write hidden .git directory in dl_dir
+    tokio::fs::create_dir_all(dl_dir.join(".git")).await.unwrap();
+    tokio::fs::write(dl_dir.join(".git").join("config"), "git config").await.unwrap();
+
+    let caddyfile_text = format!(r#"
+    :0 {{
+        file_server {{
+            root {}
+        }}
+        redir /fasdddddddr3wfesdewfasdASFASde21qwfesdq3rd2qewklas /fasdddddddr3wfesdewfasdASFASde21qwfesdq3rd2qewklas/ 308
+        handle_path /fasdddddddr3wfesdewfasdASFASde21qwfesdq3rd2qewklas/* {{
+            root /* {}
+            file_server {{
+                browse
+                hide .git
+            }}
+        }}
+    }}
+    "#, www_dir.to_str().unwrap(), dl_dir.to_str().unwrap());
+
+    let config = adapt_caddyfile(&caddyfile_text, ".").expect("Failed to adapt");
+    let http = config.http_app().expect("Missing http app");
+    let server_cfg = http.servers.values().next().expect("Missing server");
+
+    let registry = ModuleRegistry::new();
+    let vhost_router = compile_virtual_host_router(server_cfg, &registry).unwrap();
+
+    let mut instance = HttpServerInstance::new("user_caddyfile_test", "127.0.0.1:0", vhost_router);
+    instance.bind().await.expect("Failed to bind TCP listener");
+    let bound_addr = instance.local_addr().expect("Missing local addr");
+
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    let server_handle = tokio::spawn(async move {
+        instance.run(shutdown_rx).await
+    });
+
+    let client = reqwest::Client::builder().redirect(reqwest::redirect::Policy::none()).build().unwrap();
+
+    // 1. GET / -> serves /var/www/html/index.html!
+    let resp = client.get(format!("http://{}/", bound_addr)).send().await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = resp.text().await.unwrap();
+    assert_eq!(body, "Welcome to laxccs.netlib.re!");
+
+    // 2. GET /fasdddddddr3wfesdewfasdASFASde21qwfesdq3rd2qewklas -> 308 redirect
+    let resp = client.get(format!("http://{}/fasdddddddr3wfesdewfasdASFASde21qwfesdq3rd2qewklas", bound_addr)).send().await.unwrap();
+    assert_eq!(resp.status(), StatusCode::PERMANENT_REDIRECT);
+    assert_eq!(
+        resp.headers().get("Location").unwrap().to_str().unwrap(),
+        "/fasdddddddr3wfesdewfasdASFASde21qwfesdq3rd2qewklas/"
+    );
+
+    // 3. GET /fasdddddddr3wfesdewfasdASFASde21qwfesdq3rd2qewklas/ajsdoasji -> serves /x/dl/ajsdoasji!
+    let resp = client.get(format!("http://{}/fasdddddddr3wfesdewfasdASFASde21qwfesdq3rd2qewklas/ajsdoasji", bound_addr)).send().await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = resp.text().await.unwrap();
+    assert_eq!(body, "download payload");
+
+    // 4. GET /fasdddddddr3wfesdewfasdASFASde21qwfesdq3rd2qewklas/.git -> 404 Not Found (hide .git)
+    let resp = client.get(format!("http://{}/fasdddddddr3wfesdewfasdASFASde21qwfesdq3rd2qewklas/.git", bound_addr)).send().await.unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+
+    // 5. GET /fasdddddddr3wfesdewfasdASFASde21qwfesdq3rd2qewklas/ (directory listing) -> browse listing with ajsdoasji but NO .git
+    let resp = client.get(format!("http://{}/fasdddddddr3wfesdewfasdASFASde21qwfesdq3rd2qewklas/", bound_addr)).send().await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = resp.text().await.unwrap();
+    assert!(body.contains("ajsdoasji"), "listing should include ajsdoasji");
+    assert!(!body.contains(".git"), "listing should hide .git");
+
+    // Cleanup
+    shutdown_tx.send(true).unwrap();
+    server_handle.await.unwrap().unwrap();
+    let _ = tokio::fs::remove_dir_all(&temp_root).await;
+}
+
+

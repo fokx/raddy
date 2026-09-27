@@ -1750,6 +1750,7 @@ dependencies = [
  "parking_lot",
  "raddy-core",
  "rcgen 0.13.2",
+ "ring",
  "rustls",
  "rustls-pemfile",
  "rustls-pki-types",

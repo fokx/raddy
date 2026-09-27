@@ -375,7 +375,13 @@ fn compile_handler(h_cfg: &HandlerConfig, registry: &ModuleRegistry) -> Result<A
         "file_server" => {
             let root = h_cfg.details.get("root").and_then(|v| v.as_str()).map(|s| s.to_string());
             let browse = h_cfg.details.get("browse").and_then(|v| v.as_bool()).unwrap_or(false);
-            Ok(Arc::new(FileServerHandler::new(root, browse)))
+            let hide = h_cfg
+                .details
+                .get("hide")
+                .and_then(|v| v.as_array())
+                .map(|arr| arr.iter().filter_map(|x| x.as_str().map(|s| s.to_string())).collect())
+                .unwrap_or_default();
+            Ok(Arc::new(FileServerHandler::new(root, browse, hide)))
         }
 
         "reverse_proxy" => {

@@ -23,9 +23,8 @@ impl TlsManager {
         let local_ca = Arc::new(LocalCa::new()?);
         let storage = Arc::new(FileCertStorage::new(FileCertStorage::default_dir()));
         let challenge_store = Http01ChallengeStore::new();
-
-        let acme = Arc::new(AcmeClient::new(acme_url.into(), email, challenge_store));
         let sni_resolver = Arc::new(SniResolver::new());
+        let acme = Arc::new(AcmeClient::new(acme_url.into(), email, challenge_store, sni_resolver.clone()));
 
         Ok(Self {
             local_ca,
@@ -124,8 +123,8 @@ impl TlsManager {
             .with_no_client_auth()
             .with_cert_resolver(self.sni_resolver.clone());
 
-        // Enable ALPN for HTTP/2 and HTTP/1.1
-        config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
+        // Enable ALPN for HTTP/2, HTTP/1.1 and ACME TLS-ALPN-01 (RFC 8737)
+        config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec(), b"acme-tls/1".to_vec()];
 
         Ok(Arc::new(config))
     }

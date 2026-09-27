@@ -382,6 +382,12 @@ impl Parser {
             }
         }
 
+        // If directive is "root" and matcher was set but args is empty,
+        // then the "matcher" is actually the path (e.g. `root /var/www/html`)!
+        if name == "root" && args.is_empty() && matcher.is_some() {
+            args.push(matcher.take().unwrap());
+        }
+
         Ok(DirectiveNode {
             name,
             matcher,

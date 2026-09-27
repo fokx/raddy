@@ -10,11 +10,12 @@ use raddy_core::handler::Handler;
 pub struct FileServerHandler {
     pub root: Option<String>,
     pub browse: bool,
+    pub hide: Vec<String>,
 }
 
 impl FileServerHandler {
-    pub fn new(root: Option<String>, browse: bool) -> Self {
-        Self { root, browse }
+    pub fn new(root: Option<String>, browse: bool, hide: Vec<String>) -> Self {
+        Self { root, browse, hide }
     }
 }
 
@@ -29,6 +30,14 @@ impl Handler for FileServerHandler {
 
         let root_path = PathBuf::from(root_str);
         let req_path = ctx.uri.path().to_string();
+
+        // Check hidden files/directories
+        for seg in req_path.split('/') {
+            if !seg.is_empty() && self.hide.iter().any(|h| h == seg) {
+                ctx.set_response(StatusCode::NOT_FOUND, "404 Not Found\n");
+                return Ok(());
+            }
+        }
 
         // Strip leading slash to join relative to root
         let clean_path = req_path.trim_start_matches('/');
@@ -64,7 +73,7 @@ impl Handler for FileServerHandler {
             }
 
             if self.browse {
-                return render_directory_listing(&canonical_target, &req_path, ctx).await;
+                return render_directory_listing(&canonical_target, &req_path, &self.hide, ctx).await;
             } else {
                 ctx.set_response(StatusCode::NOT_FOUND, "404 Not Found: Directory index forbidden\n");
                 return Ok(());
@@ -138,7 +147,7 @@ async fn serve_file(file_path: &Path, ctx: &mut Context) -> Result<()> {
     Ok(())
 }
 
-async fn render_directory_listing(dir_path: &Path, req_path: &str, ctx: &mut Context) -> Result<()> {
+async fn render_directory_listing(dir_path: &Path, req_path: &str, hide: &[String], ctx: &mut Context) -> Result<()> {
     let mut entries = match tokio::fs::read_dir(dir_path).await {
         Ok(rd) => rd,
         Err(_) => {
@@ -152,6 +161,9 @@ async fn render_directory_listing(dir_path: &Path, req_path: &str, ctx: &mut Con
 
     while let Ok(Some(entry)) = entries.next_entry().await {
         let name = entry.file_name().to_string_lossy().to_string();
+        if hide.iter().any(|h| h == &name) {
+            continue;
+        }
         let is_dir = entry.file_type().await.map(|ft| ft.is_dir()).unwrap_or(false);
         items.push((name, is_dir));
     }

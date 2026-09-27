@@ -18,25 +18,36 @@ pub const DIRECTIVE_ORDER: &[&str] = &[
     "log_name",
     "log_append",
     "log_skip",
+    "skip_log",
     "request_id",
     "header",
-    "request_header",
+    "copy_response_headers",
     "request_body",
-    "basic_auth",
-    "forward_auth",
+    "timeouts",
+    "redir",
+    "method",
     "rewrite",
     "uri",
     "try_files",
+    "basicauth",
+    "basic_auth",
+    "forward_auth",
+    "request_header",
     "push",
+    "intercept",
     "invoke",
-    "redir",
-    "respond",
+    "handle",
+    "handle_path",
+    "route",
     "abort",
     "error",
+    "copy_response",
+    "respond",
+    "metrics",
+    "reverse_proxy",
     "php_fastcgi",
     "file_server",
     "acme_server",
-    "reverse_proxy",
     "templates",
     "encode",
 ];
@@ -56,6 +67,15 @@ pub struct Adapter {
     custom_order: HashMap<String, usize>,
     site_log_counter: usize,
     named_routes: HashMap<String, NamedRouteNode>,
+    server_options: Vec<ServerGlobalOptions>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct ServerGlobalOptions {
+    listener_address: Option<String>,
+    protocols: Option<Vec<String>>,
+    strict_sni_host: Option<bool>,
+    name: Option<String>,
 }
 
 impl Default for Adapter {
@@ -84,6 +104,7 @@ impl Adapter {
             custom_order,
             site_log_counter: 0,
             named_routes: HashMap::new(),
+            server_options: Vec::new(),
         }
     }
 
@@ -113,6 +134,9 @@ impl Adapter {
         if !auto_https_disabled {
             self.setup_automatic_https(&mut servers);
         }
+
+        // 4. Apply server global options overrides
+        self.apply_server_options(&mut servers)?;
 
         let http_app = HttpApp { servers };
         config.set_http_app(http_app).map_err(|e| ParseError::Adaptation {
@@ -218,9 +242,76 @@ impl Adapter {
                     let logging = self.logging.get_or_insert_with(LoggingConfig::default);
                     logging.logs.insert(log_name, log_cfg);
                 }
+                "servers" => {
+                    let mut srv_opt = ServerGlobalOptions::default();
+                    if let Some(arg) = opt.args.first() {
+                        srv_opt.listener_address = Some(arg.clone());
+                    }
+                    if let Some(ref block) = opt.block {
+                        for sub in block {
+                            match sub.name.as_str() {
+                                "protocols" => {
+                                    srv_opt.protocols = Some(sub.args.clone());
+                                }
+                                "name" => {
+                                    if let Some(n) = sub.args.first() {
+                                        srv_opt.name = Some(n.clone());
+                                    }
+                                }
+                                "strict_sni_host" => {
+                                    let val = sub.args.first().map(|s| s.as_str() != "insecure_off").unwrap_or(true);
+                                    srv_opt.strict_sni_host = Some(val);
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    self.server_options.push(srv_opt);
+                }
                 _ => {}
             }
         }
+        Ok(())
+    }
+
+    fn apply_server_options(&self, servers: &mut HashMap<String, HttpServer>) -> ParseResult<()> {
+        if self.server_options.is_empty() {
+            return Ok(());
+        }
+
+        // Apply generic server options (without listener_address) first,
+        // then specific server options (with listener_address) so specific options take precedence.
+        let mut sorted_opts = self.server_options.clone();
+        sorted_opts.sort_by_key(|o| if o.listener_address.is_some() { 1 } else { 0 });
+
+        let mut name_replacements = Vec::new();
+
+        for (srv_name, server) in servers.iter_mut() {
+            for opt in &sorted_opts {
+                let matches = match &opt.listener_address {
+                    Some(addr) => {
+                        server.listen.iter().any(|l| l == addr || l.ends_with(addr) || addr.ends_with(l))
+                    }
+                    None => true,
+                };
+
+                if matches {
+                    if let Some(ref protos) = opt.protocols {
+                        server.protocols = Some(protos.clone());
+                    }
+                    if let Some(ref new_name) = opt.name {
+                        name_replacements.push((srv_name.clone(), new_name.clone()));
+                    }
+                }
+            }
+        }
+
+        for (old_name, new_name) in name_replacements {
+            if let Some(srv) = servers.remove(&old_name) {
+                servers.insert(new_name, srv);
+            }
+        }
+
         Ok(())
     }
 
@@ -378,7 +469,14 @@ impl Adapter {
         }
 
         // Attach directive matcher if specified
-        if let Some(ref m) = dir.matcher {
+        let effective_matcher = dir.matcher.as_ref().or_else(|| {
+            if dir.name == "handle_path" {
+                dir.args.first()
+            } else {
+                None
+            }
+        });
+        if let Some(m) = effective_matcher {
             if m.starts_with('@') {
                 if let Some(named) = named_matchers.get(m) {
                     merge_matcher_set(&mut matcher_set, named);
@@ -503,7 +601,13 @@ impl Adapter {
             }
 
             "root" => {
-                let path = dir.args.first().cloned().unwrap_or_default();
+                let path = if !dir.args.is_empty() {
+                    dir.args[0].clone()
+                } else if let Some(ref m) = dir.matcher {
+                    m.clone()
+                } else {
+                    String::new()
+                };
                 let mut vars = HashMap::new();
                 vars.insert("root".to_string(), path);
                 let cfg = HandlerConfig::new("vars").with_field("vars", vars);
@@ -597,6 +701,7 @@ impl Adapter {
             "file_server" => {
                 let mut browse = false;
                 let mut root = None;
+                let mut hide = Vec::new();
 
                 for arg in &dir.args {
                     if arg == "browse" {
@@ -609,7 +714,12 @@ impl Adapter {
                         if sub.name == "browse" {
                             browse = true;
                         } else if sub.name == "root" {
-                            root = sub.args.first().cloned();
+                            root = sub.args.first().cloned().or_else(|| sub.matcher.clone());
+                        } else if sub.name == "hide" {
+                            hide.extend(sub.args.clone());
+                            if let Some(ref m) = sub.matcher {
+                                hide.push(m.clone());
+                            }
                         }
                     }
                 }
@@ -617,6 +727,9 @@ impl Adapter {
                 let mut cfg = HandlerConfig::new("file_server").with_field("browse", browse);
                 if let Some(r) = root {
                     cfg = cfg.with_field("root", r);
+                }
+                if !hide.is_empty() {
+                    cfg = cfg.with_field("hide", hide);
                 }
                 configs.push(cfg);
             }
@@ -650,8 +763,12 @@ impl Adapter {
 
             "handle" => {
                 if let Some(ref block) = dir.block {
+                    let mut sorted_block = block.clone();
+                    sorted_block.sort_by_key(|sub| {
+                        self.custom_order.get(&sub.name).copied().unwrap_or(500)
+                    });
                     let mut sub_routes = Vec::new();
-                    for sub in block {
+                    for sub in &sorted_block {
                         let r = self.adapt_directive(sub, &[], None, &HashMap::new())?;
                         sub_routes.push(r);
                     }
@@ -662,7 +779,13 @@ impl Adapter {
 
             "handle_path" => {
                 let prefix = dir.matcher.as_deref().or_else(|| dir.args.first().map(|s| s.as_str())).unwrap_or("");
-                let clean_prefix = prefix.trim_end_matches('*');
+                let clean_prefix = if prefix.ends_with("/*") {
+                    &prefix[..prefix.len() - 2]
+                } else if prefix.ends_with('*') {
+                    &prefix[..prefix.len() - 1]
+                } else {
+                    prefix
+                };
                 let mut sub_routes = Vec::new();
                 if !clean_prefix.is_empty() {
                     let rewrite_cfg = HandlerConfig::new("rewrite").with_field("strip_path_prefix", clean_prefix);
@@ -671,7 +794,11 @@ impl Adapter {
                     sub_routes.push(r);
                 }
                 if let Some(ref block) = dir.block {
-                    for sub in block {
+                    let mut sorted_block = block.clone();
+                    sorted_block.sort_by_key(|sub| {
+                        self.custom_order.get(&sub.name).copied().unwrap_or(500)
+                    });
+                    for sub in &sorted_block {
                         let r = self.adapt_directive(sub, &[], None, &HashMap::new())?;
                         sub_routes.push(r);
                     }
