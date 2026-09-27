@@ -53,6 +53,7 @@ pub struct Adapter {
     staging: Option<bool>,
     custom_order: HashMap<String, usize>,
     site_log_counter: usize,
+    named_routes: HashMap<String, NamedRouteNode>,
 }
 
 impl Default for Adapter {
@@ -79,11 +80,14 @@ impl Adapter {
             staging: None,
             custom_order,
             site_log_counter: 0,
+            named_routes: HashMap::new(),
         }
     }
 
     /// Adapts a Caddyfile AST into Raddy's internal JSON Config model.
     pub fn adapt(&mut self, caddyfile: &Caddyfile) -> ParseResult<Config> {
+        self.named_routes = caddyfile.named_routes.clone();
+
         // 1. Process global options
         if let Some(ref opts) = caddyfile.global_options {
             self.process_global_options(opts)?;
@@ -263,7 +267,7 @@ impl Adapter {
 
         // Each address in site.addresses maps to a parsed address
         for addr_str in &site.addresses {
-            let parsed_addr = parse_site_address(addr_str, self.http_port, self.https_port);
+            let parsed_addr = parse_site_address(addr_str, self.http_port, self.https_port)?;
             let server_key = format!("srv_{}", parsed_addr.listen);
 
             let server = servers.entry(server_key).or_insert_with(|| HttpServer {
@@ -633,6 +637,23 @@ impl Adapter {
                 configs.push(cfg);
             }
 
+            "invoke" => {
+                let name = dir.args.first().ok_or_else(|| ParseError::Adaptation {
+                    line: dir.span.line,
+                    message: "invoke directive requires a named route name".into(),
+                })?;
+
+                if !self.named_routes.contains_key(name) {
+                    return Err(ParseError::Adaptation {
+                        line: dir.span.line,
+                        message: format!("cannot invoke named route '{}', which was not defined", name),
+                    });
+                }
+
+                let cfg = HandlerConfig::new("invoke").with_field("name", name);
+                configs.push(cfg);
+            }
+
             "log_skip" | "log_append" => {
                 let cfg = HandlerConfig::new(dir.name.as_str());
                 configs.push(cfg);
@@ -981,7 +1002,26 @@ struct ParsedAddress {
     path_prefix: Option<String>,
 }
 
-fn parse_site_address(addr: &str, default_http_port: u16, default_https_port: u16) -> ParsedAddress {
+fn parse_site_address(addr: &str, default_http_port: u16, default_https_port: u16) -> ParseResult<ParsedAddress> {
+    if addr.starts_with("wss://") {
+        return Err(ParseError::Syntax {
+            line: 0,
+            col: 0,
+            message: "the scheme wss:// is only supported in browsers; use https:// instead".into(),
+        });
+    }
+
+    if let Some(idx) = addr.find("://") {
+        let scheme = &addr[..idx];
+        if scheme != "http" && scheme != "https" {
+            return Err(ParseError::Syntax {
+                line: 0,
+                col: 0,
+                message: format!("unsupported URL scheme {}://", scheme),
+            });
+        }
+    }
+
     let mut s = addr;
     let mut scheme = None;
 
@@ -1001,7 +1041,17 @@ fn parse_site_address(addr: &str, default_http_port: u16, default_https_port: u1
 
     let (host, port) = if let Some(colon_idx) = s.rfind(':') {
         let h = &s[..colon_idx];
-        let p = s[colon_idx + 1..].parse::<u16>().unwrap_or(80);
+        let port_str = &s[colon_idx + 1..];
+        let p = match port_str.parse::<i64>() {
+            Ok(val) if (0..=65535).contains(&val) => val as u16,
+            _ => {
+                return Err(ParseError::Syntax {
+                    line: 0,
+                    col: 0,
+                    message: format!("port {} is out of range", port_str),
+                });
+            }
+        };
         let host_val = if h.is_empty() { "*" } else { h };
         (host_val.to_string(), p)
     } else if s.is_empty() || s == "*" {
@@ -1016,12 +1066,12 @@ fn parse_site_address(addr: &str, default_http_port: u16, default_https_port: u1
     };
 
     let listen = format!(":{}", port);
-    ParsedAddress {
+    Ok(ParsedAddress {
         host,
         port,
         listen,
         path_prefix,
-    }
+    })
 }
 
 fn parse_named_matcher_block(dir: &DirectiveNode) -> ParseResult<MatcherSet> {

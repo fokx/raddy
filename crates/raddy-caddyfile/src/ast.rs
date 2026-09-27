@@ -7,6 +7,7 @@ pub struct Caddyfile {
     pub snippets: HashMap<String, SnippetNode>,
     pub named_routes: HashMap<String, NamedRouteNode>,
     pub site_blocks: Vec<SiteBlockNode>,
+    pub imports: Vec<DirectiveNode>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

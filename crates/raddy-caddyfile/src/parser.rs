@@ -78,8 +78,25 @@ impl Parser {
                 None => break,
             };
 
-            // Snippet: (name)
             if let TokenKind::Literal(ref text) = first_tok.kind {
+                // Reject request matchers defined globally
+                if text.starts_with('@') {
+                    return Err(ParseError::Syntax {
+                        line: first_tok.span.line,
+                        col: first_tok.span.col,
+                        message: format!("request matchers may not be defined globally, they must be in a site block; found {}, at Caddyfile:{}", text, first_tok.span.line),
+                    });
+                }
+
+                // Top-level import: import <path/snippet> [args...]
+                if text == "import" {
+                    let dir = self.parse_directive_line()?;
+                    caddyfile.imports.push(dir);
+                    self.skip_newlines();
+                    continue;
+                }
+
+                // Snippet: (name)
                 if text.starts_with('(') && text.ends_with(')') {
                     let name = text[1..text.len() - 1].trim().to_string();
                     let span = first_tok.span;
@@ -100,6 +117,13 @@ impl Parser {
                 if text.starts_with("&(") && text.ends_with(')') {
                     let name = text[2..text.len() - 1].trim().to_string();
                     let span = first_tok.span;
+                    if caddyfile.named_routes.contains_key(&name) {
+                        return Err(ParseError::Syntax {
+                            line: span.line,
+                            col: span.col,
+                            message: format!("cannot have duplicate named_routes: {}", name),
+                        });
+                    }
                     self.advance(); // consume &(name)
                     self.skip_newlines();
 
@@ -124,7 +148,7 @@ impl Parser {
     }
 
     fn parse_site_block(&mut self) -> ParseResult<SiteBlockNode> {
-        let mut addresses = Vec::new();
+        let mut addresses: Vec<String> = Vec::new();
         let span = self.peek().map(|t| t.span).unwrap_or_default();
 
         // Read address tokens until BlockOpen or Newline (single-line)
@@ -142,11 +166,26 @@ impl Parser {
                         self.advance(); // consume {
                         break;
                     } else {
-                        // Single-line block where addresses ended? No, if no block open, it's single line
-                        return Err(ParseError::Syntax {
-                            line: tok.span.line,
-                            col: tok.span.col,
-                            message: "Expected '{' or directive for site block".into(),
+                        // Braceless site block: directives continue until EOF
+                        if addresses.len() == 1 {
+                            let known = [
+                                "handle", "handle_path", "handle_response", "route", "respond",
+                                "reverse_proxy", "redir", "file_server", "header", "encode",
+                                "tls", "root", "log", "log_skip", "log_append", "try_files", "rewrite", "invoke"
+                            ];
+                            if known.contains(&addresses[0].as_str()) {
+                                return Err(ParseError::Syntax {
+                                    line: span.line,
+                                    col: span.col,
+                                    message: format!("Caddyfile:{}: parsed '{}' as a site address, but it is a known directive; directives must appear in a site block", span.line, addresses[0]),
+                                });
+                            }
+                        }
+                        let directives = self.parse_directive_list(false)?;
+                        return Ok(SiteBlockNode {
+                            addresses,
+                            directives,
+                            span,
                         });
                     }
                 }
@@ -308,7 +347,13 @@ impl Parser {
                 self.advance();
 
                 // Check if first arg is a matcher: @name, /path*, or *
-                if matcher.is_none() && args.is_empty() && (val_str.starts_with('@') || val_str.starts_with('/') || val_str == "*") {
+                let can_have_matcher = name != "import"
+                    && name != "order"
+                    && name != "admin"
+                    && name != "email"
+                    && name != "auto_https"
+                    && name != "log";
+                if can_have_matcher && matcher.is_none() && args.is_empty() && (val_str.starts_with('@') || val_str.starts_with('/') || val_str == "*") {
                     matcher = Some(val_str);
                 } else {
                     args.push(val_str);

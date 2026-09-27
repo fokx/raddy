@@ -104,3 +104,53 @@ fn test_single_line_site_shorthand() {
     assert_eq!(srv.routes.len(), 1);
     assert_eq!(srv.routes[0].handle[0].handler, "static_response");
 }
+
+#[test]
+fn test_upstream_caddyfile_adapt_suite() {
+    let test_dir = std::path::Path::new("/f/caddy/caddytest/integration/caddyfile_adapt");
+    if !test_dir.exists() {
+        eprintln!("Upstream Caddy test directory not found, skipping");
+        return;
+    }
+
+    let entries = std::fs::read_dir(test_dir).expect("Failed to read test dir");
+    let mut total = 0;
+    let mut passed = 0;
+
+    for entry in entries {
+        let entry = entry.unwrap();
+        let path = entry.path();
+        if path.extension().and_then(|s| s.to_str()) != Some("caddyfiletest") {
+            continue;
+        }
+
+        let content = std::fs::read_to_string(&path).expect("Failed to read test file");
+        if !content.contains("----------") {
+            continue;
+        }
+
+        let parts: Vec<&str> = content.split("----------").collect();
+        let input = parts[0];
+        let expected = parts[1].trim();
+
+        // Only test valid JSON outputs in this test
+        if serde_json::from_str::<serde_json::Value>(expected).is_err() {
+            continue;
+        }
+
+        total += 1;
+        match adapt_caddyfile(input, "/f/caddy/caddytest/integration") {
+            Ok(_) => passed += 1,
+            Err(e) => panic!(
+                "Failed on test {}: {}\nInput:\n{}",
+                path.file_name().unwrap().to_string_lossy(),
+                e,
+                input
+            ),
+        }
+    }
+
+    println!("Upstream Caddyfile adaptation test results: {} / {} passed", passed, total);
+    assert!(total > 200, "Expected at least 200 tests");
+    assert_eq!(passed, total, "All valid Caddy upstream tests should adapt successfully");
+}

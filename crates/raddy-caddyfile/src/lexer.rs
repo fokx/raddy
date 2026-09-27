@@ -350,6 +350,14 @@ impl<'a> Lexer<'a> {
         let mut brace_depth = 0;
 
         while let Some(c) = self.peek() {
+            if c == '\\' {
+                self.advance(); // consume \
+                if let Some(next_c) = self.advance() {
+                    s.push(next_c);
+                }
+                continue;
+            }
+
             if c == '{' {
                 let is_standalone = match self.peek_next() {
                     Some(' ') | Some('\t') | Some('\r') | Some('\n') | None => true,
