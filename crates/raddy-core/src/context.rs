@@ -23,6 +23,11 @@ pub struct Context {
     pub response_headers: HeaderMap,
     pub response_body: Option<Bytes>,
     pub response_written: bool,
+
+    // Logging control state
+    pub log_skip: bool,
+    pub log_name: Option<String>,
+    pub log_appends: HashMap<String, serde_json::Value>,
 }
 
 impl Context {
@@ -39,6 +44,9 @@ impl Context {
             response_headers: HeaderMap::new(),
             response_body: None,
             response_written: false,
+            log_skip: false,
+            log_name: None,
+            log_appends: HashMap::new(),
         }
     }
 

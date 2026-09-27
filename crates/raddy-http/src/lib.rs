@@ -10,6 +10,7 @@ pub mod fileserver;
 pub mod flow;
 pub mod http3;
 pub mod limits;
+pub mod logging;
 pub mod map;
 pub mod router;
 pub mod server;
@@ -18,6 +19,7 @@ pub mod templates;
 
 pub use error::{HttpServerError, Result};
 pub use fileserver::FileServerHandler;
+pub use logging::LogPipeline;
 pub use router::{
     compile_virtual_host_router, CompiledRoute, Router, SubrouteHandler, VirtualHostRouter,
 };

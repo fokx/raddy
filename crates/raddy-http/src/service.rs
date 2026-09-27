@@ -6,7 +6,7 @@ use http_body_util::{BodyExt, Full};
 use hyper::body::Incoming;
 use hyper::Request;
 use raddy_core::context::Context;
-
+use crate::logging::LogPipeline;
 use crate::router::VirtualHostRouter;
 
 /// Service handler for incoming Hyper HTTP requests.
@@ -16,7 +16,10 @@ pub async fn handle_request(
     router: Arc<VirtualHostRouter>,
     alt_svc_port: Option<u16>,
     challenge_store: Option<raddy_tls::acme::Http01ChallengeStore>,
+    log_pipeline: Option<Arc<LogPipeline>>,
+    server_logs: Option<raddy_core::config::ServerLogConfig>,
 ) -> std::result::Result<Response<Full<Bytes>>, std::convert::Infallible> {
+    let start_time = std::time::Instant::now();
     let (parts, incoming_body) = req.into_parts();
 
     // Intercept ACME HTTP-01 challenge if present
@@ -73,10 +76,16 @@ pub async fn handle_request(
         resp_builder = resp_builder.header(k, v);
     }
 
-    let body = ctx.response_body.unwrap_or_default();
+    let body = ctx.response_body.clone().unwrap_or_default();
+    let body_len = body.len();
     let resp = resp_builder
         .body(Full::new(body))
         .unwrap_or_else(|_| Response::new(Full::new(Bytes::from("500 Internal Error"))));
+
+    let duration = start_time.elapsed();
+    if let Some(ref pl) = log_pipeline {
+        pl.log_request(&ctx, duration, status, body_len, server_logs.as_ref());
+    }
 
     Ok(resp)
 }

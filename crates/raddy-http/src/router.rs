@@ -477,14 +477,65 @@ fn compile_handler(h_cfg: &HandlerConfig, registry: &ModuleRegistry) -> Result<A
             Ok(Arc::new(crate::flow::ErrorHandler::new(status, message)))
         }
 
-        "log_skip" | "log_append" => {
-            Ok(Arc::new(NoopHandler))
+        "log_skip" => {
+            Ok(Arc::new(LogSkipHandler))
+        }
+
+        "log_append" => {
+            let key = h_cfg.details.get("key").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let value = h_cfg.details.get("value").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            Ok(Arc::new(LogAppendHandler { key, value }))
+        }
+
+        "log_name" => {
+            let name = h_cfg.details.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            Ok(Arc::new(LogNameHandler { name }))
         }
 
         other => {
             // Attempt to resolve through dynamic module registry
             registry.create_handler(other, serde_json::to_value(&h_cfg.details)?)
         }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct LogSkipHandler;
+
+#[async_trait]
+impl Handler for LogSkipHandler {
+    async fn handle(&self, ctx: &mut Context) -> Result<()> {
+        ctx.log_skip = true;
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct LogAppendHandler {
+    pub key: String,
+    pub value: String,
+}
+
+#[async_trait]
+impl Handler for LogAppendHandler {
+    async fn handle(&self, ctx: &mut Context) -> Result<()> {
+        let val_eval = raddy_core::eval_placeholders(&self.value, ctx);
+        ctx.log_appends.insert(self.key.clone(), serde_json::Value::String(val_eval));
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct LogNameHandler {
+    pub name: String,
+}
+
+#[async_trait]
+impl Handler for LogNameHandler {
+    async fn handle(&self, ctx: &mut Context) -> Result<()> {
+        let name_eval = raddy_core::eval_placeholders(&self.name, ctx);
+        ctx.log_name = Some(name_eval);
+        Ok(())
     }
 }
 

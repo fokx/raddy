@@ -83,6 +83,21 @@ pub struct LogConfig {
 
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub exclude: Vec<String>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sampling: Option<LogSamplingConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct LogSamplingConfig {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub interval: Option<String>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub first: Option<usize>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thereafter: Option<usize>,
 }
 
 /// HTTP App configuration containing servers.
@@ -121,6 +136,9 @@ pub struct ServerLogConfig {
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub logger_names: Option<HashMap<String, String>>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub log_credentials: Option<bool>,
 }
 
 /// A Route maps request matchers to a sequence of handlers.

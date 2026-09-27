@@ -24,6 +24,8 @@ pub struct HttpServerInstance {
     pub protocols: Vec<String>,
     pub alt_svc_port: Option<u16>,
     pub challenge_store: Option<raddy_tls::acme::Http01ChallengeStore>,
+    pub log_pipeline: Option<Arc<crate::logging::LogPipeline>>,
+    pub server_logs: Option<raddy_core::config::ServerLogConfig>,
     listener: Option<TcpListener>,
     local_addr: Option<SocketAddr>,
 }
@@ -40,9 +42,21 @@ impl HttpServerInstance {
             protocols: vec!["h1".into(), "h2".into(), "h3".into()],
             alt_svc_port: None,
             challenge_store: None,
+            log_pipeline: None,
+            server_logs: None,
             listener: None,
             local_addr: None,
         }
+    }
+
+    pub fn with_logging(
+        mut self,
+        pipeline: Arc<crate::logging::LogPipeline>,
+        logs: Option<raddy_core::config::ServerLogConfig>,
+    ) -> Self {
+        self.log_pipeline = Some(pipeline);
+        self.server_logs = logs;
+        self
     }
 
     pub fn with_challenge_store(mut self, store: raddy_tls::acme::Http01ChallengeStore) -> Self {
@@ -139,6 +153,8 @@ impl HttpServerInstance {
         let auto_builder = Builder::new(TokioExecutor::new());
         let alt_svc_port = self.alt_svc_port;
         let quic_endpoint = self.quic_endpoint;
+        let log_pipeline = self.log_pipeline.clone();
+        let server_logs = self.server_logs.clone();
 
         loop {
             tokio::select! {
@@ -149,6 +165,8 @@ impl HttpServerInstance {
                             let builder = auto_builder.clone();
                             let acceptor_opt = tls_acceptor.clone();
                             let challenge_store_clone = challenge_store.clone();
+                            let log_pipe = log_pipeline.clone();
+                            let srv_logs = server_logs.clone();
                             let mut conn_shutdown_rx = shutdown_rx.clone();
 
                             tokio::spawn(async move {
@@ -163,11 +181,15 @@ impl HttpServerInstance {
                                     };
                                     let io = TokioIo::new(tls_stream);
                                     let cstore = challenge_store_clone.clone();
+                                    let lp = log_pipe.clone();
+                                    let sl = srv_logs.clone();
                                     let service = hyper::service::service_fn(move |req| {
                                         let r = router_clone.clone();
                                         let cs = cstore.clone();
+                                        let pipe = lp.clone();
+                                        let logs = sl.clone();
                                         async move {
-                                            handle_request(req, Some(remote_addr), r, alt_svc_port, cs).await
+                                            handle_request(req, Some(remote_addr), r, alt_svc_port, cs, pipe, logs).await
                                         }
                                     });
 
@@ -188,11 +210,15 @@ impl HttpServerInstance {
                                     // Cleartext HTTP (HTTP/1.1 or HTTP/2 cleartext)
                                     let io = TokioIo::new(tcp_stream);
                                     let cstore = challenge_store_clone.clone();
+                                    let lp = log_pipe.clone();
+                                    let sl = srv_logs.clone();
                                     let service = hyper::service::service_fn(move |req| {
                                         let r = router_clone.clone();
                                         let cs = cstore.clone();
+                                        let pipe = lp.clone();
+                                        let logs = sl.clone();
                                         async move {
-                                            handle_request(req, Some(remote_addr), r, None, cs).await
+                                            handle_request(req, Some(remote_addr), r, None, cs, pipe, logs).await
                                         }
                                     });
 
@@ -226,11 +252,13 @@ impl HttpServerInstance {
                     }
                 } => {
                     let router_clone = router.clone();
+                    let lp = log_pipeline.clone();
+                    let sl = server_logs.clone();
                     tokio::spawn(async move {
                         match incoming.await {
                             Ok(conn) => {
                                 let remote = conn.remote_address();
-                                if let Err(e) = crate::http3::serve_h3_connection(conn, remote, router_clone).await {
+                                if let Err(e) = crate::http3::serve_h3_connection(conn, remote, router_clone, lp, sl).await {
                                     tracing::debug!("H3 connection error from {}: {}", remote, e);
                                 }
                             }
@@ -274,6 +302,7 @@ impl ServerManager {
         let (shutdown_tx, _) = watch::channel(false);
         let mut servers = Vec::new();
         let mut pending_acme = Vec::new();
+        let log_pipeline = Arc::new(crate::logging::LogPipeline::from_config(config));
 
         if let Some(http) = config.http_app() {
             for (name, srv_cfg) in &http.servers {
@@ -282,7 +311,9 @@ impl ServerManager {
                 let is_tls = listen_addr.ends_with(":443") || srv_cfg.tls_connection_policies.is_some();
                 let protocols = srv_cfg.protocols.clone().unwrap_or_else(|| vec!["h1".into(), "h2".into(), "h3".into()]);
 
-                let mut instance = HttpServerInstance::new(name, listen_addr, vhost_router).with_protocols(protocols);
+                let mut instance = HttpServerInstance::new(name, listen_addr, vhost_router)
+                    .with_protocols(protocols)
+                    .with_logging(log_pipeline.clone(), srv_cfg.logs.clone());
 
                 if let Some(ref tls) = tls_manager {
                     instance = instance.with_challenge_store(tls.challenge_store());

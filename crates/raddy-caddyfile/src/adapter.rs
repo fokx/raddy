@@ -15,6 +15,7 @@ pub const DIRECTIVE_ORDER: &[&str] = &[
     "fs",
     "root",
     "log",
+    "log_name",
     "log_append",
     "log_skip",
     "request_id",
@@ -51,6 +52,7 @@ pub struct Adapter {
     email: Option<String>,
     acme_ca: Option<String>,
     staging: Option<bool>,
+    log_credentials: Option<bool>,
     custom_order: HashMap<String, usize>,
     site_log_counter: usize,
     named_routes: HashMap<String, NamedRouteNode>,
@@ -78,6 +80,7 @@ impl Adapter {
             email: None,
             acme_ca: None,
             staging: None,
+            log_credentials: None,
             custom_order,
             site_log_counter: 0,
             named_routes: HashMap::new(),
@@ -201,6 +204,9 @@ impl Adapter {
                 "local_certs" => {
                     self.staging = Some(false);
                 }
+                "log_credentials" => {
+                    self.log_credentials = Some(true);
+                }
                 "debug" => {
                     let logging = self.logging.get_or_insert_with(LoggingConfig::default);
                     let default_log = logging.logs.entry("default".to_string()).or_default();
@@ -227,7 +233,7 @@ impl Adapter {
         let mut named_matchers: HashMap<String, MatcherSet> = HashMap::new();
         let mut regular_directives: Vec<DirectiveNode> = Vec::new();
         let mut site_tls_policy: Option<TlsConnectionPolicy> = None;
-        let mut site_log_dir: Option<DirectiveNode> = None;
+        let mut site_log_dirs: Vec<DirectiveNode> = Vec::new();
 
         for dir in &site.directives {
             if dir.name.starts_with('@') {
@@ -237,14 +243,22 @@ impl Adapter {
             } else if dir.name == "tls" {
                 site_tls_policy = Some(parse_tls_directive(dir)?);
             } else if dir.name == "log" {
-                site_log_dir = Some(dir.clone());
+                site_log_dirs.push(dir.clone());
             } else {
                 regular_directives.push(dir.clone());
             }
         }
 
-        // Process site log directive if present
-        let site_logger_name = if let Some(ref log_node) = site_log_dir {
+        // Process site log directives
+        struct ParsedSiteLogger {
+            name: String,
+            hostnames: Vec<String>,
+            no_hostname: bool,
+        }
+
+        let mut site_loggers = Vec::new();
+
+        for log_node in &site_log_dirs {
             let name = if let Some(first) = log_node.args.first() {
                 first.clone()
             } else {
@@ -252,13 +266,30 @@ impl Adapter {
                 self.site_log_counter += 1;
                 generated
             };
+
+            let mut hostnames = Vec::new();
+            let mut no_hostname = false;
+
+            if let Some(ref block) = log_node.block {
+                for sub in block {
+                    if sub.name == "no_hostname" {
+                        no_hostname = true;
+                    } else if sub.name == "hostnames" {
+                        hostnames.extend(sub.args.clone());
+                    }
+                }
+            }
+
             let log_cfg = parse_log_directive(log_node, &name)?;
             let logging = self.logging.get_or_insert_with(LoggingConfig::default);
             logging.logs.insert(name.clone(), log_cfg);
-            Some(name)
-        } else {
-            None
-        };
+
+            site_loggers.push(ParsedSiteLogger {
+                name,
+                hostnames,
+                no_hostname,
+            });
+        }
 
         // Sort directives by priority table
         regular_directives.sort_by_key(|dir| {
@@ -279,13 +310,25 @@ impl Adapter {
                 logs: None,
             });
 
-            if let Some(ref log_name) = site_logger_name {
-                let srv_logs = server.logs.get_or_insert_with(ServerLogConfig::default);
-                if srv_logs.default_logger_name.is_none() {
-                    srv_logs.default_logger_name = Some(log_name.clone());
+            for sl in &site_loggers {
+                if !sl.no_hostname {
+                    let srv_logs = server.logs.get_or_insert_with(ServerLogConfig::default);
+                    if self.log_credentials.is_some() {
+                        srv_logs.log_credentials = self.log_credentials;
+                    }
+                    if !sl.hostnames.is_empty() {
+                        let names = srv_logs.logger_names.get_or_insert_with(HashMap::new);
+                        for h in &sl.hostnames {
+                            names.insert(h.clone(), sl.name.clone());
+                        }
+                    } else {
+                        if srv_logs.default_logger_name.is_none() {
+                            srv_logs.default_logger_name = Some(sl.name.clone());
+                        }
+                        let names = srv_logs.logger_names.get_or_insert_with(HashMap::new);
+                        names.insert(parsed_addr.host.clone(), sl.name.clone());
+                    }
                 }
-                let names = srv_logs.logger_names.get_or_insert_with(HashMap::new);
-                names.insert(parsed_addr.host.clone(), log_name.clone());
             }
 
             if let Some(ref tls_pol) = site_tls_policy {
@@ -654,8 +697,24 @@ impl Adapter {
                 configs.push(cfg);
             }
 
-            "log_skip" | "log_append" => {
-                let cfg = HandlerConfig::new(dir.name.as_str());
+            "log_skip" => {
+                let cfg = HandlerConfig::new("log_skip");
+                configs.push(cfg);
+            }
+
+            "log_append" => {
+                let key = dir.args.first().cloned().unwrap_or_default();
+                let value = dir.args.get(1).cloned().unwrap_or_default();
+                let cfg = HandlerConfig::new("log_append")
+                    .with_field("key", key)
+                    .with_field("value", value);
+                configs.push(cfg);
+            }
+
+            "log_name" => {
+                let name = dir.args.first().cloned().unwrap_or_default();
+                let cfg = HandlerConfig::new("log_name")
+                    .with_field("name", name);
                 configs.push(cfg);
             }
 
@@ -880,6 +939,7 @@ fn parse_log_directive(dir: &DirectiveNode, logger_name: &str) -> ParseResult<Lo
     let mut level = Some("INFO".to_string());
     let mut include = vec![format!("http.log.access.{}", logger_name)];
     let mut exclude = Vec::new();
+    let mut sampling = None;
 
     if let Some(ref block) = dir.block {
         for sub in block {
@@ -895,8 +955,12 @@ fn parse_log_directive(dir: &DirectiveNode, logger_name: &str) -> ParseResult<Lo
                                 });
                                 if let Some(ref file_block) = sub.block {
                                     for opt in file_block {
-                                        if let Some(val) = opt.args.first() {
-                                            obj[opt.name.clone()] = serde_json::json!(val);
+                                        if opt.args.is_empty() {
+                                            obj[opt.name.clone()] = serde_json::json!(true);
+                                        } else if opt.args.len() == 1 {
+                                            obj[opt.name.clone()] = serde_json::json!(opt.args[0]);
+                                        } else {
+                                            obj[opt.name.clone()] = serde_json::json!(opt.args);
                                         }
                                     }
                                 }
@@ -913,7 +977,17 @@ fn parse_log_directive(dir: &DirectiveNode, logger_name: &str) -> ParseResult<Lo
                             }
                             "net" => {
                                 let addr = sub.args.get(1).cloned().unwrap_or_default();
-                                writer = Some(serde_json::json!({ "output": "net", "address": addr }));
+                                let mut obj = serde_json::json!({ "output": "net", "address": addr });
+                                if let Some(ref net_block) = sub.block {
+                                    for opt in net_block {
+                                        if opt.args.is_empty() {
+                                            obj[opt.name.clone()] = serde_json::json!(true);
+                                        } else if let Some(val) = opt.args.first() {
+                                            obj[opt.name.clone()] = serde_json::json!(val);
+                                        }
+                                    }
+                                }
+                                writer = Some(obj);
                             }
                             _ => {
                                 writer = Some(serde_json::json!({ "output": wtype }));
@@ -922,19 +996,7 @@ fn parse_log_directive(dir: &DirectiveNode, logger_name: &str) -> ParseResult<Lo
                     }
                 }
                 "format" => {
-                    if let Some(ftype) = sub.args.first() {
-                        match ftype.as_str() {
-                            "json" => {
-                                encoder = Some(serde_json::json!({ "format": "json" }));
-                            }
-                            "console" => {
-                                encoder = Some(serde_json::json!({ "format": "console" }));
-                            }
-                            other => {
-                                encoder = Some(serde_json::json!({ "format": other }));
-                            }
-                        }
-                    }
+                    encoder = Some(parse_format_directive(sub)?);
                 }
                 "level" => {
                     if let Some(lvl) = sub.args.first() {
@@ -947,16 +1009,30 @@ fn parse_log_directive(dir: &DirectiveNode, logger_name: &str) -> ParseResult<Lo
                 "exclude" => {
                     exclude = sub.args.clone();
                 }
+                "sampling" => {
+                    let mut s_cfg = LogSamplingConfig::default();
+                    if let Some(ref s_block) = sub.block {
+                        for item in s_block {
+                            match item.name.as_str() {
+                                "interval" => s_cfg.interval = item.args.first().cloned(),
+                                "first" => s_cfg.first = item.args.first().and_then(|s| s.parse().ok()),
+                                "thereafter" => s_cfg.thereafter = item.args.first().and_then(|s| s.parse().ok()),
+                                _ => {}
+                            }
+                        }
+                    }
+                    sampling = Some(s_cfg);
+                }
                 _ => {}
             }
         }
     }
 
     if writer.is_none() {
-        writer = Some(serde_json::json!({ "output": "stdout" }));
+        writer = Some(serde_json::json!({ "output": "stderr" }));
     }
     if encoder.is_none() {
-        encoder = Some(serde_json::json!({ "format": "console" }));
+        encoder = Some(serde_json::json!({ "format": "json" }));
     }
 
     Ok(LogConfig {
@@ -965,7 +1041,169 @@ fn parse_log_directive(dir: &DirectiveNode, logger_name: &str) -> ParseResult<Lo
         level,
         include,
         exclude,
+        sampling,
     })
+}
+
+fn parse_format_directive(sub: &DirectiveNode) -> ParseResult<serde_json::Value> {
+    let ftype = sub.args.first().map(|s| s.as_str()).unwrap_or("json");
+    let mut obj = serde_json::json!({ "format": ftype });
+
+    if let Some(ref block) = sub.block {
+        match ftype {
+            "filter" => {
+                let mut filters = Vec::new();
+                for node in block {
+                    if node.name == "wrap" {
+                        let wrap_type = node.args.first().cloned().unwrap_or_else(|| "json".into());
+                        obj["wrap"] = serde_json::json!({ "format": wrap_type });
+                    } else if node.name == "fields" {
+                        if let Some(ref inner_block) = node.block {
+                            for inner in inner_block {
+                                if let Some(rule) = parse_filter_node(inner) {
+                                    filters.push(rule);
+                                }
+                            }
+                        }
+                    } else if is_common_format_option(&node.name) {
+                        apply_common_format_option(&mut obj, node);
+                    } else if let Some(rule) = parse_filter_node(node) {
+                        filters.push(rule);
+                    }
+                }
+                obj["filters"] = serde_json::json!(filters);
+            }
+            "append" => {
+                let mut fields = serde_json::Map::new();
+                for node in block {
+                    if node.name == "wrap" {
+                        let wrap_type = node.args.first().cloned().unwrap_or_else(|| "json".into());
+                        obj["wrap"] = serde_json::json!({ "format": wrap_type });
+                    } else if node.name == "fields" {
+                        if let Some(ref inner_block) = node.block {
+                            for inner in inner_block {
+                                if let Some(val) = inner.args.first() {
+                                    fields.insert(inner.name.clone(), serde_json::json!(val));
+                                }
+                            }
+                        }
+                    } else if is_common_format_option(&node.name) {
+                        apply_common_format_option(&mut obj, node);
+                    } else if let Some(val) = node.args.first() {
+                        fields.insert(node.name.clone(), serde_json::json!(val));
+                    }
+                }
+                obj["fields"] = serde_json::Value::Object(fields);
+            }
+            _ => {
+                // json, console, or custom
+                for node in block {
+                    if is_common_format_option(&node.name) {
+                        apply_common_format_option(&mut obj, node);
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(obj)
+}
+
+fn is_common_format_option(name: &str) -> bool {
+    matches!(
+        name,
+        "message_key"
+            | "level_key"
+            | "time_key"
+            | "name_key"
+            | "caller_key"
+            | "stacktrace_key"
+            | "line_ending"
+            | "time_format"
+            | "time_local"
+            | "duration_format"
+            | "level_format"
+    )
+}
+
+fn apply_common_format_option(obj: &mut serde_json::Value, node: &DirectiveNode) {
+    if node.name == "time_local" {
+        obj["time_local"] = serde_json::json!(true);
+    } else if let Some(val) = node.args.first() {
+        obj[node.name.clone()] = serde_json::json!(val);
+    }
+}
+
+fn parse_filter_node(node: &DirectiveNode) -> Option<serde_json::Value> {
+    let field = &node.name;
+    let act_type = node.args.first()?.as_str();
+
+    let mut rule = serde_json::json!({
+        "field": field,
+        "type": act_type,
+    });
+
+    match act_type {
+        "delete" => {}
+        "rename" => {
+            if let Some(new_key) = node.args.get(1) {
+                rule["key"] = serde_json::json!(new_key);
+            }
+        }
+        "replace" => {
+            if let Some(rep) = node.args.get(1) {
+                rule["replacement"] = serde_json::json!(rep);
+            }
+        }
+        "hash" => {}
+        "regexp" => {
+            if let Some(pat) = node.args.get(1) {
+                rule["pattern"] = serde_json::json!(pat);
+            }
+            if let Some(rep) = node.args.get(2) {
+                rule["replacement"] = serde_json::json!(rep);
+            }
+        }
+        "ip_mask" => {
+            let mut ipv4 = node.args.get(1).and_then(|s| s.parse::<u8>().ok()).unwrap_or(16);
+            let mut ipv6 = node.args.get(2).and_then(|s| s.parse::<u8>().ok()).unwrap_or(32);
+            if let Some(ref block) = node.block {
+                for item in block {
+                    if item.name == "ipv4" {
+                        if let Some(v) = item.args.first().and_then(|s| s.parse::<u8>().ok()) {
+                            ipv4 = v;
+                        }
+                    } else if item.name == "ipv6" {
+                        if let Some(v) = item.args.first().and_then(|s| s.parse::<u8>().ok()) {
+                            ipv6 = v;
+                        }
+                    }
+                }
+            }
+            rule["ipv4"] = serde_json::json!(ipv4);
+            rule["ipv6"] = serde_json::json!(ipv6);
+        }
+        "query" | "cookie" => {
+            let mut actions = Vec::new();
+            if let Some(ref block) = node.block {
+                for act in block {
+                    let atype = act.name.as_str();
+                    let key = act.args.first().cloned().unwrap_or_default();
+                    let val = act.args.get(1).cloned().unwrap_or_default();
+                    actions.push(serde_json::json!({
+                        "type": atype,
+                        "key": key,
+                        "name": key,
+                        "value": val,
+                    }));
+                }
+            }
+            rule["actions"] = serde_json::json!(actions);
+        }
+        _ => return None,
+    }
+
+    Some(rule)
 }
 
 fn json_upstream(addr: &str) -> serde_json::Value {
@@ -1273,5 +1511,163 @@ hkg.eeeu.de {
         assert_eq!(srv_http.routes[0].handle[0].handler, "static_response");
         assert_eq!(srv_http.routes[0].handle[0].details.get("status_code"), Some(&serde_json::json!(308)));
         assert_eq!(srv_http.routes[0].handle[0].details.get("location"), Some(&serde_json::json!("https://{host}{uri}")));
+    }
+
+    #[test]
+    fn test_adapt_log_with_rolling_and_sampling() {
+        let input = r#"
+example.com {
+    log {
+        output file /var/log/access.log {
+            roll_size 50mb
+            roll_keep 5
+            roll_keep_for 720h
+            roll_uncompressed
+            roll_local_time
+            mode 0640
+        }
+        format json {
+            time_format rfc3339
+            time_local
+            duration_format ms
+        }
+        sampling {
+            interval 2s
+            first 10
+            thereafter 5
+        }
+    }
+}
+"#;
+        let tokens = Lexer::new(input).tokenize().unwrap();
+        let caddyfile = Parser::new(tokens).parse().unwrap();
+        let mut adapter = Adapter::new();
+        let config = adapter.adapt(&caddyfile).unwrap();
+
+        let logging = config.logging.as_ref().unwrap();
+        let log0 = logging.logs.get("log0").unwrap();
+
+        let writer = log0.writer.as_ref().unwrap();
+        assert_eq!(writer.get("output"), Some(&serde_json::json!("file")));
+        assert_eq!(writer.get("filename"), Some(&serde_json::json!("/var/log/access.log")));
+        assert_eq!(writer.get("roll_size"), Some(&serde_json::json!("50mb")));
+        assert_eq!(writer.get("roll_keep"), Some(&serde_json::json!("5")));
+        assert_eq!(writer.get("roll_keep_for"), Some(&serde_json::json!("720h")));
+        assert_eq!(writer.get("roll_uncompressed"), Some(&serde_json::json!(true)));
+        assert_eq!(writer.get("roll_local_time"), Some(&serde_json::json!(true)));
+        assert_eq!(writer.get("mode"), Some(&serde_json::json!("0640")));
+
+        let encoder = log0.encoder.as_ref().unwrap();
+        assert_eq!(encoder.get("format"), Some(&serde_json::json!("json")));
+        assert_eq!(encoder.get("time_format"), Some(&serde_json::json!("rfc3339")));
+        assert_eq!(encoder.get("time_local"), Some(&serde_json::json!(true)));
+        assert_eq!(encoder.get("duration_format"), Some(&serde_json::json!("ms")));
+
+        let sampling = log0.sampling.as_ref().unwrap();
+        assert_eq!(sampling.interval.as_deref(), Some("2s"));
+        assert_eq!(sampling.first, Some(10));
+        assert_eq!(sampling.thereafter, Some(5));
+    }
+
+    #[test]
+    fn test_adapt_log_filter_and_append() {
+        let input = r#"
+example.com {
+    log {
+        format filter {
+            request>headers>User-Agent delete
+            request>remote_ip ip_mask 16 32
+            request>uri query {
+                delete secret
+                replace token REDACTED
+            }
+            request>headers>Cookie cookie {
+                replace session SESS_REDACTED
+            }
+            wrap json
+        }
+    }
+}
+"#;
+        let tokens = Lexer::new(input).tokenize().unwrap();
+        let caddyfile = Parser::new(tokens).parse().unwrap();
+        let mut adapter = Adapter::new();
+        let config = adapter.adapt(&caddyfile).unwrap();
+
+        let logging = config.logging.as_ref().unwrap();
+        let log0 = logging.logs.get("log0").unwrap();
+
+        let encoder = log0.encoder.as_ref().unwrap();
+        assert_eq!(encoder.get("format"), Some(&serde_json::json!("filter")));
+        assert_eq!(encoder.get("wrap"), Some(&serde_json::json!({ "format": "json" })));
+
+        let filters = encoder.get("filters").and_then(|v| v.as_array()).unwrap();
+        assert_eq!(filters.len(), 4);
+        assert_eq!(filters[0].get("field"), Some(&serde_json::json!("request>headers>User-Agent")));
+        assert_eq!(filters[0].get("type"), Some(&serde_json::json!("delete")));
+
+        assert_eq!(filters[1].get("field"), Some(&serde_json::json!("request>remote_ip")));
+        assert_eq!(filters[1].get("type"), Some(&serde_json::json!("ip_mask")));
+        assert_eq!(filters[1].get("ipv4"), Some(&serde_json::json!(16)));
+        assert_eq!(filters[1].get("ipv6"), Some(&serde_json::json!(32)));
+
+        assert_eq!(filters[2].get("field"), Some(&serde_json::json!("request>uri")));
+        assert_eq!(filters[2].get("type"), Some(&serde_json::json!("query")));
+
+        assert_eq!(filters[3].get("field"), Some(&serde_json::json!("request>headers>Cookie")));
+        assert_eq!(filters[3].get("type"), Some(&serde_json::json!("cookie")));
+    }
+
+    #[test]
+    fn test_adapt_multiple_logs_hostnames_and_no_hostname() {
+        let input = r#"
+{
+    log_credentials
+}
+
+*.example.com {
+    log {
+        hostnames foo.example.com
+        output file /var/log/foo.log
+    }
+    log {
+        hostnames bar.example.com
+        output file /var/log/bar.log
+    }
+    log custom_logger {
+        no_hostname
+        output file /var/log/custom.log
+    }
+    log_skip /health
+    log_append cluster us-east-1
+    log_name @api custom_logger
+}
+"#;
+        let tokens = Lexer::new(input).tokenize().unwrap();
+        let caddyfile = Parser::new(tokens).parse().unwrap();
+        let mut adapter = Adapter::new();
+        let config = adapter.adapt(&caddyfile).unwrap();
+
+        let logging = config.logging.as_ref().unwrap();
+        assert!(logging.logs.contains_key("log0"));
+        assert!(logging.logs.contains_key("log1"));
+        assert!(logging.logs.contains_key("custom_logger"));
+
+        let http = config.http_app().unwrap();
+        let srv = http.servers.get("srv_:443").unwrap();
+        let srv_logs = srv.logs.as_ref().unwrap();
+
+        assert_eq!(srv_logs.log_credentials, Some(true));
+        let logger_names = srv_logs.logger_names.as_ref().unwrap();
+        assert_eq!(logger_names.get("foo.example.com"), Some(&"log0".to_string()));
+        assert_eq!(logger_names.get("bar.example.com"), Some(&"log1".to_string()));
+        // custom_logger had no_hostname, so it shouldn't be mapped directly
+        assert_ne!(logger_names.get("*.example.com"), Some(&"custom_logger".to_string()));
+
+        // Check routes have log_skip, log_append, log_name handlers
+        let handlers: Vec<&str> = srv.routes.iter().flat_map(|r| r.handle.iter()).map(|h| h.handler.as_str()).collect();
+        assert!(handlers.contains(&"log_skip"));
+        assert!(handlers.contains(&"log_append"));
+        assert!(handlers.contains(&"log_name"));
     }
 }

@@ -171,7 +171,7 @@ impl Parser {
                             let known = [
                                 "handle", "handle_path", "handle_response", "route", "respond",
                                 "reverse_proxy", "redir", "file_server", "header", "encode",
-                                "tls", "root", "log", "log_skip", "log_append", "try_files", "rewrite", "invoke"
+                                "tls", "root", "log", "log_name", "log_skip", "log_append", "try_files", "rewrite", "invoke"
                             ];
                             if known.contains(&addresses[0].as_str()) {
                                 return Err(ParseError::Syntax {

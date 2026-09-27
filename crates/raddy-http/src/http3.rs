@@ -26,6 +26,8 @@ pub async fn serve_h3_connection(
     conn: Connection,
     remote_addr: SocketAddr,
     router: Arc<VirtualHostRouter>,
+    log_pipeline: Option<Arc<crate::logging::LogPipeline>>,
+    server_logs: Option<raddy_core::config::ServerLogConfig>,
 ) -> Result<()> {
     let mut h3_conn = match h3::server::builder()
         .build(h3_quinn::Connection::new(conn))
@@ -40,8 +42,10 @@ pub async fn serve_h3_connection(
 
     while let Ok(Some(resolver)) = h3_conn.accept().await {
         let router_clone = router.clone();
+        let pipeline_clone = log_pipeline.clone();
+        let logs_clone = server_logs.clone();
         tokio::spawn(async move {
-            if let Err(e) = handle_h3_stream(resolver, remote_addr, router_clone).await {
+            if let Err(e) = handle_h3_stream(resolver, remote_addr, router_clone, pipeline_clone, logs_clone).await {
                 tracing::debug!("H3 stream error from {}: {}", remote_addr, e);
             }
         });
@@ -55,7 +59,10 @@ async fn handle_h3_stream(
     resolver: h3::server::RequestResolver<h3_quinn::Connection, Bytes>,
     remote_addr: SocketAddr,
     router: Arc<VirtualHostRouter>,
+    log_pipeline: Option<Arc<crate::logging::LogPipeline>>,
+    server_logs: Option<raddy_core::config::ServerLogConfig>,
 ) -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let start_time = std::time::Instant::now();
     let (req, mut stream) = resolver.resolve_request().await?;
     let (parts, _) = req.into_parts();
 
@@ -89,12 +96,20 @@ async fn handle_h3_stream(
     let resp = resp_builder.body(())?;
     stream.send_response(resp).await?;
 
-    if let Some(body) = ctx.response_body {
+    let mut body_len = 0;
+    if let Some(body) = ctx.response_body.clone() {
         if !body.is_empty() {
+            body_len = body.len();
             stream.send_data(body).await?;
         }
     }
 
     stream.finish().await?;
+
+    let duration = start_time.elapsed();
+    if let Some(ref pl) = log_pipeline {
+        pl.log_request(&ctx, duration, status, body_len, server_logs.as_ref());
+    }
+
     Ok(())
 }
