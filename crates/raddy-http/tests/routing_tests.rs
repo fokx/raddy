@@ -336,6 +336,9 @@ async fn test_user_caddyfile_live_file_server_and_handle_path() {
     tokio::fs::write(www_dir.join("index.html"), "Welcome to laxccs.netlib.re!").await.unwrap();
     // Write download file in dl_dir
     tokio::fs::write(dl_dir.join("ajsdoasji"), "download payload").await.unwrap();
+    // Create subdirectory 2 with file jai11
+    tokio::fs::create_dir_all(dl_dir.join("2")).await.unwrap();
+    tokio::fs::write(dl_dir.join("2").join("jai11"), "nested file").await.unwrap();
     // Write hidden .git directory in dl_dir
     tokio::fs::create_dir_all(dl_dir.join(".git")).await.unwrap();
     tokio::fs::write(dl_dir.join(".git").join("config"), "git config").await.unwrap();
@@ -398,12 +401,31 @@ async fn test_user_caddyfile_live_file_server_and_handle_path() {
     let resp = client.get(format!("http://{}/fasdddddddr3wfesdewfasdASFASde21qwfesdq3rd2qewklas/.git", bound_addr)).send().await.unwrap();
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 
-    // 5. GET /fasdddddddr3wfesdewfasdASFASde21qwfesdq3rd2qewklas/ (directory listing) -> browse listing with ajsdoasji but NO .git
+    // 5. GET /fasdddddddr3wfesdewfasdASFASde21qwfesdq3rd2qewklas/ (directory listing) -> relative links and correct heading
     let resp = client.get(format!("http://{}/fasdddddddr3wfesdewfasdASFASde21qwfesdq3rd2qewklas/", bound_addr)).send().await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
     let body = resp.text().await.unwrap();
-    assert!(body.contains("ajsdoasji"), "listing should include ajsdoasji");
+    assert!(body.contains("Index of /fasdddddddr3wfesdewfasdASFASde21qwfesdq3rd2qewklas/"), "header should contain full original path");
+    assert!(body.contains("href=\"./ajsdoasji\""), "link to ajsdoasji must be relative (./ajsdoasji)");
+    assert!(body.contains("href=\"./2/\""), "link to 2/ must be relative (./2/)");
     assert!(!body.contains(".git"), "listing should hide .git");
+    assert!(!body.contains("Parent Directory"), "root of share should not have Parent Directory link");
+
+    // 6. GET /fasdddddddr3wfesdewfasdASFASde21qwfesdq3rd2qewklas/2 (subfolder without slash) -> redirects to /fasd.../2/
+    let resp = client.get(format!("http://{}/fasdddddddr3wfesdewfasdASFASde21qwfesdq3rd2qewklas/2", bound_addr)).send().await.unwrap();
+    assert_eq!(resp.status(), StatusCode::PERMANENT_REDIRECT);
+    assert_eq!(
+        resp.headers().get("Location").unwrap().to_str().unwrap(),
+        "/fasdddddddr3wfesdewfasdASFASde21qwfesdq3rd2qewklas/2/"
+    );
+
+    // 7. GET /fasdddddddr3wfesdewfasdASFASde21qwfesdq3rd2qewklas/2/ -> lists jai11 and has Parent Directory link
+    let resp = client.get(format!("http://{}/fasdddddddr3wfesdewfasdASFASde21qwfesdq3rd2qewklas/2/", bound_addr)).send().await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = resp.text().await.unwrap();
+    assert!(body.contains("Index of /fasdddddddr3wfesdewfasdASFASde21qwfesdq3rd2qewklas/2/"));
+    assert!(body.contains("href=\"..\""), "subfolder must have Parent Directory link");
+    assert!(body.contains("href=\"./jai11\""), "link to jai11 must be relative");
 
     // Cleanup
     shutdown_tx.send(true).unwrap();

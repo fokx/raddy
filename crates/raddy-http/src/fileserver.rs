@@ -67,6 +67,19 @@ impl Handler for FileServerHandler {
 
         // If directory, check for index.html or directory browse
         if canonical_target.is_dir() {
+            // Enforce trailing slash on directory URLs so relative links in directory listings resolve correctly
+            let orig_path = ctx.orig_uri.path();
+            if !orig_path.ends_with('/') {
+                let query = ctx.orig_uri.query().map(|q| format!("?{}", q)).unwrap_or_default();
+                let redirect_to = format!("{}/{}", orig_path, query);
+                if let Ok(loc) = HeaderValue::try_from(redirect_to) {
+                    ctx.response_headers.insert(http::header::LOCATION, loc);
+                }
+                ctx.status = Some(StatusCode::PERMANENT_REDIRECT);
+                ctx.response_written = true;
+                return Ok(());
+            }
+
             let index_file = canonical_target.join("index.html");
             if index_file.is_file() {
                 return serve_file(&index_file, ctx).await;
@@ -156,7 +169,7 @@ async fn render_directory_listing(dir_path: &Path, req_path: &str, hide: &[Strin
         }
     };
 
-    let clean_req = req_path.trim_end_matches('/');
+    let clean_req = req_path.trim_matches('/');
     let mut items = Vec::new();
 
     while let Ok(Some(entry)) = entries.next_entry().await {
@@ -176,20 +189,21 @@ async fn render_directory_listing(dir_path: &Path, req_path: &str, hide: &[Strin
         }
     });
 
+    let display_path = ctx.orig_uri.path();
     let mut html = format!(
         "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>Index of {}</title>\
         <style>body{{font-family:sans-serif;margin:2em;}}ul{{list-style:none;padding:0;}}li{{padding:0.3em 0;}}a{{text-decoration:none;}}a:hover{{text-decoration:underline;}}</style>\
         </head><body><h1>Index of {}</h1><hr><ul>",
-        req_path, req_path
+        display_path, display_path
     );
 
-    if clean_req != "" && clean_req != "/" {
+    if !clean_req.is_empty() {
         html.push_str("<li><a href=\"..\">&larr; Parent Directory</a></li>");
     }
 
     for (name, is_dir) in items {
         let slash = if is_dir { "/" } else { "" };
-        let link = format!("{}/{}{}", clean_req, name, slash);
+        let link = format!("./{}{}", name, slash);
         html.push_str(&format!(
             "<li><a href=\"{}\">{}{}</a></li>",
             link, name, slash

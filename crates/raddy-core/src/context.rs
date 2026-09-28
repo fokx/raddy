@@ -10,6 +10,7 @@ pub struct Context {
     // Request metadata
     pub method: Method,
     pub uri: Uri,
+    pub orig_uri: Uri,
     pub headers: HeaderMap,
     pub remote_addr: Option<SocketAddr>,
     pub tls_server_name: Option<String>,
@@ -32,9 +33,11 @@ pub struct Context {
 
 impl Context {
     pub fn new(method: Method, uri: Uri, headers: HeaderMap, body: Bytes) -> Self {
+        let orig_uri = uri.clone();
         Self {
             method,
             uri,
+            orig_uri,
             headers,
             remote_addr: None,
             tls_server_name: None,
@@ -115,6 +118,24 @@ impl PlaceholderProvider for Context {
 
             "path" | "http.request.uri.path" => {
                 let p = self.uri.path();
+                if p.is_empty() {
+                    Some("/".to_string())
+                } else {
+                    Some(p.to_string())
+                }
+            }
+
+            "orig_uri" | "http.request.orig_uri" => {
+                let s = self
+                    .orig_uri
+                    .path_and_query()
+                    .map(|pq| pq.as_str().to_string())
+                    .unwrap_or_else(|| self.orig_uri.path().to_string());
+                Some(s)
+            }
+
+            "orig_uri.path" | "http.request.orig_uri.path" => {
+                let p = self.orig_uri.path();
                 if p.is_empty() {
                     Some("/".to_string())
                 } else {
