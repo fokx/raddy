@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use http::{HeaderMap, Method, StatusCode, Uri};
+use http::{HeaderMap, HeaderValue, Method, StatusCode, Uri};
 use bytes::Bytes;
 use crate::placeholder::PlaceholderProvider;
 
@@ -32,7 +32,19 @@ pub struct Context {
 }
 
 impl Context {
-    pub fn new(method: Method, uri: Uri, headers: HeaderMap, body: Bytes) -> Self {
+    pub fn new(method: Method, uri: Uri, mut headers: HeaderMap, body: Bytes) -> Self {
+        // Synthesize Host header if missing (e.g. from HTTP/2 or HTTP/3 where :authority is in uri)
+        if !headers.contains_key(http::header::HOST) {
+            if let Some(auth) = uri.authority() {
+                if let Ok(val) = HeaderValue::try_from(auth.as_str()) {
+                    headers.insert(http::header::HOST, val);
+                }
+            } else if let Some(h) = uri.host() {
+                if let Ok(val) = HeaderValue::try_from(h) {
+                    headers.insert(http::header::HOST, val);
+                }
+            }
+        }
         let orig_uri = uri.clone();
         Self {
             method,

@@ -179,6 +179,7 @@ impl HttpServerInstance {
                                             return;
                                         }
                                     };
+                                    let tls_sni = tls_stream.get_ref().1.server_name().map(|s| s.to_string());
                                     let io = TokioIo::new(tls_stream);
                                     let cstore = challenge_store_clone.clone();
                                     let lp = log_pipe.clone();
@@ -188,8 +189,9 @@ impl HttpServerInstance {
                                         let cs = cstore.clone();
                                         let pipe = lp.clone();
                                         let logs = sl.clone();
+                                        let sni = tls_sni.clone();
                                         async move {
-                                            handle_request(req, Some(remote_addr), r, alt_svc_port, cs, pipe, logs).await
+                                            handle_request(req, Some(remote_addr), r, alt_svc_port, cs, pipe, logs, sni).await
                                         }
                                     });
 
@@ -218,7 +220,7 @@ impl HttpServerInstance {
                                         let pipe = lp.clone();
                                         let logs = sl.clone();
                                         async move {
-                                            handle_request(req, Some(remote_addr), r, None, cs, pipe, logs).await
+                                            handle_request(req, Some(remote_addr), r, None, cs, pipe, logs, None).await
                                         }
                                     });
 

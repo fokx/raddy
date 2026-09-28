@@ -212,3 +212,70 @@ async fn test_reverse_proxy_failover_and_retries() {
 
     let _ = shutdown_tx.send(true);
 }
+
+#[tokio::test]
+async fn test_reverse_proxy_forwards_host_from_uri_authority_when_host_header_missing() {
+    use hyper_util::rt::{TokioExecutor, TokioIo};
+    use hyper_util::server::conn::auto::Builder;
+    use tokio::net::TcpListener;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let backend_addr = listener.local_addr().unwrap();
+
+    let received_host = Arc::new(tokio::sync::Mutex::new(String::new()));
+    let rec_clone = received_host.clone();
+    let (shutdown_tx, mut shutdown_rx) = tokio::sync::watch::channel(false);
+
+    tokio::spawn(async move {
+        loop {
+            tokio::select! {
+                res = listener.accept() => {
+                    if let Ok((stream, _)) = res {
+                        let io = TokioIo::new(stream);
+                        let rec = rec_clone.clone();
+                        tokio::spawn(async move {
+                            let service = hyper::service::service_fn(move |req: http::Request<hyper::body::Incoming>| {
+                                let host_hdr = req.headers().get(http::header::HOST)
+                                    .and_then(|v| v.to_str().ok())
+                                    .unwrap_or("")
+                                    .to_string();
+                                let rec = rec.clone();
+                                async move {
+                                    *rec.lock().await = host_hdr;
+                                    let resp = http::Response::new(http_body_util::Full::new(Bytes::from("OK")));
+                                    Ok::<_, std::convert::Infallible>(resp)
+                                }
+                            });
+                            let _ = Builder::new(TokioExecutor::new()).serve_connection_with_upgrades(io, service).await;
+                        });
+                    }
+                }
+                _ = shutdown_rx.changed() => {
+                    break;
+                }
+            }
+        }
+    });
+
+    let upstream = Arc::new(Upstream::new(backend_addr.to_string()));
+    let handler = ReverseProxyHandler::new(
+        vec![upstream],
+        Box::new(First),
+        HeaderMutator::new(),
+    );
+
+    // Simulate an HTTP/2 request: no Host header in HeaderMap, authority present in Uri
+    let uri: Uri = "https://umami.pig2.de/".parse().unwrap();
+    let mut ctx = Context::new(Method::GET, uri, HeaderMap::new(), Bytes::new());
+    ctx.tls_server_name = Some("umami.pig2.de".to_string());
+
+    handler.handle(&mut ctx).await.expect("Proxy failed");
+    assert_eq!(ctx.status, Some(StatusCode::OK));
+
+    let host = received_host.lock().await.clone();
+    assert_eq!(host, "umami.pig2.de", "Backend should have received Host: umami.pig2.de");
+
+    let _ = shutdown_tx.send(true);
+}
+

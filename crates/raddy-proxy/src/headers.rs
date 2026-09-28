@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use http::{HeaderMap, HeaderName, HeaderValue};
 use raddy_core::context::Context;
-use raddy_core::placeholder::eval_placeholders;
+use raddy_core::placeholder::{eval_placeholders, PlaceholderProvider};
 
 /// Rules for mutating request headers before sending upstream (`header_up`)
 /// and mutating response headers before sending to client (`header_down`).
@@ -51,7 +51,12 @@ impl HeaderMutator {
         }
 
         if !self.header_up_delete.iter().any(|d| d.eq_ignore_ascii_case("X-Forwarded-Host")) {
-            if let Some(host) = headers.get(http::header::HOST).cloned() {
+            let host_val = headers.get(http::header::HOST).cloned().or_else(|| {
+                ctx.get_placeholder("hostport")
+                    .or_else(|| ctx.get_placeholder("host"))
+                    .and_then(|h| HeaderValue::try_from(h).ok())
+            });
+            if let Some(host) = host_val {
                 headers.insert(HeaderName::from_static("x-forwarded-host"), host);
             }
         }

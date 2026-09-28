@@ -260,4 +260,68 @@ fn test_user_caddyfile_handle_path_and_fileserver_adaptation() {
     assert_eq!(hide[0].as_str(), Some(".git"));
 }
 
+#[test]
+fn test_single_line_named_matchers_and_handle_grouping() {
+    let input = r#"
+xjtu.app, xjtu.men, kr.pig2.de {
+    @static path /_app/* /fonts/* /favicon.ico /manifest.json /emoji-data.json /robots.txt
+    handle @static {
+        root * /f/murmur/build/client
+        file_server
+    }
+
+    handle_path /uploads/* {
+        root * /f/xjuploads-reorg
+        file_server
+    }
+
+    @cors_preflight method OPTIONS
+    handle @cors_preflight {
+        respond 204
+    }
+
+    handle {
+        reverse_proxy 127.0.0.1:4002
+    }
+}
+"#;
+
+    let config = adapt_caddyfile(input, ".").expect("Failed to adapt caddyfile");
+    let http = config.http_app().expect("Missing http app");
+    let srv443 = &http.servers["srv_:443"];
+
+    // Find routes for kr.pig2.de
+    let kr_routes: Vec<&raddy_core::config::Route> = srv443.routes.iter().filter(|r| {
+        r.r#match.as_ref().map(|m| m.iter().any(|ms| ms.host.as_ref().map(|h| h.contains(&"kr.pig2.de".to_string())).unwrap_or(false))).unwrap_or(false)
+    }).collect();
+
+    assert_eq!(kr_routes.len(), 4, "Should have 4 handle routes for kr.pig2.de");
+
+    // All handle routes must share the same group
+    let grp = kr_routes[0].group.as_ref().expect("Handle route should have group");
+    for r in &kr_routes {
+        assert_eq!(r.group.as_ref(), Some(grp), "All handle routes in the site must share the same group");
+    }
+
+    // Route 0 is @static
+    let m0 = &kr_routes[0].r#match.as_ref().unwrap()[0];
+    let paths = m0.path.as_ref().expect("@static must have path matcher populated from single-line syntax");
+    assert!(paths.contains(&"/_app/*".to_string()));
+    assert!(paths.contains(&"/favicon.ico".to_string()));
+
+    // Route 1 is handle_path /uploads/*
+    let m1 = &kr_routes[1].r#match.as_ref().unwrap()[0];
+    assert_eq!(m1.path.as_ref().unwrap(), &vec!["/uploads/*".to_string()]);
+
+    // Route 2 is @cors_preflight method OPTIONS
+    let m2 = &kr_routes[2].r#match.as_ref().unwrap()[0];
+    assert_eq!(m2.method.as_ref().unwrap(), &vec!["OPTIONS".to_string()]);
+
+    // Route 3 is the fallback handle with NO matcher (except host)
+    let m3 = &kr_routes[3].r#match.as_ref().unwrap()[0];
+    assert!(m3.path.is_none());
+    assert!(m3.method.is_none());
+}
+
+
 

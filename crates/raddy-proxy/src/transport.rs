@@ -76,10 +76,24 @@ impl HttpTransport {
             .method(method)
             .uri(uri.path_and_query().map(|pq| pq.as_str()).unwrap_or("/"));
 
+        let mut has_host = false;
         for (k, v) in headers {
             if let Some(name) = k {
+                if name == http::header::HOST {
+                    has_host = true;
+                }
                 req_builder = req_builder.header(name, v);
             }
+        }
+
+        // HTTP/1.1 requires a Host header. Ensure one is present if not set by headers.
+        if !has_host {
+            let host_to_send = uri
+                .authority()
+                .map(|a| a.as_str())
+                .or_else(|| uri.host())
+                .unwrap_or(&target_addr);
+            req_builder = req_builder.header(http::header::HOST, host_to_send);
         }
 
         let upstream_req = req_builder

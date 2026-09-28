@@ -66,6 +66,7 @@ pub struct Adapter {
     log_credentials: Option<bool>,
     custom_order: HashMap<String, usize>,
     site_log_counter: usize,
+    handle_group_counter: usize,
     named_routes: HashMap<String, NamedRouteNode>,
     server_options: Vec<ServerGlobalOptions>,
 }
@@ -87,9 +88,15 @@ impl Default for Adapter {
 impl Adapter {
     pub fn new() -> Self {
         let mut custom_order = HashMap::new();
+        let mut handle_prio = 0;
         for (i, &name) in DIRECTIVE_ORDER.iter().enumerate() {
-            custom_order.insert(name.to_string(), i * 10);
+            let prio = i * 10;
+            if name == "handle" {
+                handle_prio = prio;
+            }
+            custom_order.insert(name.to_string(), prio);
         }
+        custom_order.insert("handle_path".to_string(), handle_prio);
 
         Self {
             http_port: DEFAULT_HTTP_PORT,
@@ -103,6 +110,7 @@ impl Adapter {
             log_credentials: None,
             custom_order,
             site_log_counter: 0,
+            handle_group_counter: 0,
             named_routes: HashMap::new(),
             server_options: Vec::new(),
         }
@@ -382,9 +390,19 @@ impl Adapter {
             });
         }
 
-        // Sort directives by priority table
+        let handle_group_id = format!("group_{}", self.handle_group_counter);
+        self.handle_group_counter += 1;
+
+        // Sort directives by priority table.
+        // Directives with matchers sort before fallback handle directives without matchers.
         regular_directives.sort_by_key(|dir| {
-            self.custom_order.get(&dir.name).copied().unwrap_or(500)
+            let prio = self.custom_order.get(&dir.name).copied().unwrap_or(500);
+            let is_fallback_handle = if dir.name == "handle" && dir.matcher.is_none() && dir.args.is_empty() {
+                1
+            } else {
+                0
+            };
+            (prio, is_fallback_handle)
         });
 
         // Each address in site.addresses maps to a parsed address
@@ -443,7 +461,10 @@ impl Adapter {
 
             // Translate directives into Route handlers
             for dir in &regular_directives {
-                let route = self.adapt_directive(dir, &host_matchers, path_matcher.as_deref(), &named_matchers)?;
+                let mut route = self.adapt_directive(dir, &host_matchers, path_matcher.as_deref(), &named_matchers)?;
+                if dir.name == "handle" || dir.name == "handle_path" {
+                    route.group = Some(handle_group_id.clone());
+                }
                 server.routes.push(route);
             }
         }
@@ -1439,37 +1460,50 @@ fn parse_site_address(addr: &str, default_http_port: u16, default_https_port: u1
     })
 }
 
+fn populate_named_matcher_item(set: &mut MatcherSet, name: &str, args: &[String]) {
+    match name {
+        "host" => {
+            set.host = Some(args.to_vec());
+        }
+        "path" => {
+            set.path = Some(args.to_vec());
+        }
+        "method" => {
+            let methods = args.iter().map(|m| m.to_uppercase()).collect();
+            set.method = Some(methods);
+        }
+        "header" => {
+            if args.len() >= 2 {
+                let mut hdr = set.header.clone().unwrap_or_default();
+                hdr.insert(args[0].clone(), vec![args[1].clone()]);
+                set.header = Some(hdr);
+            }
+        }
+        "remote_ip" => {
+            set.remote_ip = Some(RemoteIpMatcher {
+                ranges: args.to_vec(),
+            });
+        }
+        "expression" => {
+            set.expression = Some(args.join(" "));
+        }
+        _ => {}
+    }
+}
+
 fn parse_named_matcher_block(dir: &DirectiveNode) -> ParseResult<MatcherSet> {
     let mut set = MatcherSet::default();
     if let Some(ref block) = dir.block {
         for sub in block {
-            match sub.name.as_str() {
-                "host" => {
-                    set.host = Some(sub.args.clone());
-                }
-                "path" => {
-                    set.path = Some(sub.args.clone());
-                }
-                "method" => {
-                    set.method = Some(sub.args.clone());
-                }
-                "header" => {
-                    if sub.args.len() >= 2 {
-                        let mut hdr = set.header.unwrap_or_default();
-                        hdr.insert(sub.args[0].clone(), vec![sub.args[1].clone()]);
-                        set.header = Some(hdr);
-                    }
-                }
-                "remote_ip" => {
-                    set.remote_ip = Some(RemoteIpMatcher {
-                        ranges: sub.args.clone(),
-                    });
-                }
-                "expression" => {
-                    set.expression = Some(sub.args.join(" "));
-                }
-                _ => {}
-            }
+            populate_named_matcher_item(&mut set, sub.name.as_str(), &sub.args);
+        }
+    } else if !dir.args.is_empty() {
+        if dir.args[0].starts_with('/') {
+            // Shorthand path matcher: @name /path1 /path2
+            set.path = Some(dir.args.clone());
+        } else {
+            // Standard single-line matcher: @name matcher_type [args...]
+            populate_named_matcher_item(&mut set, dir.args[0].as_str(), &dir.args[1..]);
         }
     }
     Ok(set)

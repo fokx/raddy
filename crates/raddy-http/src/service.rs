@@ -1,7 +1,7 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
 use bytes::Bytes;
-use http::{Response, StatusCode};
+use http::{HeaderValue, Response, StatusCode};
 use http_body_util::{BodyExt, Full};
 use hyper::body::Incoming;
 use hyper::Request;
@@ -18,6 +18,7 @@ pub async fn handle_request(
     challenge_store: Option<raddy_tls::acme::Http01ChallengeStore>,
     log_pipeline: Option<Arc<LogPipeline>>,
     server_logs: Option<raddy_core::config::ServerLogConfig>,
+    tls_server_name: Option<String>,
 ) -> std::result::Result<Response<Full<Bytes>>, std::convert::Infallible> {
     let start_time = std::time::Instant::now();
     let (parts, incoming_body) = req.into_parts();
@@ -51,6 +52,14 @@ pub async fn handle_request(
 
     let mut ctx = Context::new(parts.method, parts.uri, parts.headers, body_bytes);
     ctx.remote_addr = remote_addr;
+    ctx.tls_server_name = tls_server_name;
+    if !ctx.headers.contains_key(http::header::HOST) {
+        if let Some(ref sni) = ctx.tls_server_name {
+            if let Ok(val) = HeaderValue::try_from(sni.as_str()) {
+                ctx.headers.insert(http::header::HOST, val);
+            }
+        }
+    }
 
     if let Err(e) = router.route_request(&mut ctx).await {
         tracing::error!("Internal error routing request: {}", e);
