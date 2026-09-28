@@ -176,7 +176,7 @@ impl PlaceholderProvider for Context {
                 } else {
                     k.strip_prefix("http.request.uri.query.").unwrap_or(k)
                 };
-                self.uri.query().and_then(|q| {
+                let val = self.uri.query().and_then(|q| {
                     for pair in q.split('&') {
                         let mut parts = pair.splitn(2, '=');
                         if let Some(k) = parts.next() {
@@ -186,7 +186,8 @@ impl PlaceholderProvider for Context {
                         }
                     }
                     None
-                })
+                }).unwrap_or_default();
+                Some(val)
             }
 
             k if k.starts_with("header.") || k.starts_with("http.request.header.") => {
@@ -195,7 +196,8 @@ impl PlaceholderProvider for Context {
                 } else {
                     k.strip_prefix("http.request.header.").unwrap_or(k)
                 };
-                self.headers.get(header_name).and_then(|v| v.to_str().ok()).map(|s| s.to_string())
+                let val = self.headers.get(header_name).and_then(|v| v.to_str().ok()).unwrap_or("").to_string();
+                Some(val)
             }
 
             k if k.starts_with("resp.header.") || k.starts_with("http.response.header.") => {
@@ -204,7 +206,8 @@ impl PlaceholderProvider for Context {
                 } else {
                     k.strip_prefix("http.response.header.").unwrap_or(k)
                 };
-                self.response_headers.get(header_name).and_then(|v| v.to_str().ok()).map(|s| s.to_string())
+                let val = self.response_headers.get(header_name).and_then(|v| v.to_str().ok()).unwrap_or("").to_string();
+                Some(val)
             }
 
             k if k.starts_with("vars.") => {

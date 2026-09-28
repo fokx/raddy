@@ -63,12 +63,19 @@ impl HeaderMutator {
 
         // 3. Apply custom header_up rules (with placeholder evaluation)
         for (name, tmpl) in &self.header_up_set {
-            let val_str = eval_placeholders(tmpl, ctx);
-            if let (Ok(h_name), Ok(h_val)) = (
-                HeaderName::try_from(name.as_str()),
-                HeaderValue::try_from(val_str),
-            ) {
-                headers.insert(h_name, h_val);
+            let mut val_str = eval_placeholders(tmpl, ctx);
+            if val_str.is_empty() && name.eq_ignore_ascii_case("x-forwarded-host") {
+                val_str = ctx
+                    .get_placeholder("hostport")
+                    .or_else(|| ctx.get_placeholder("host"))
+                    .unwrap_or_default();
+            }
+            if let Ok(h_name) = HeaderName::try_from(name.as_str()) {
+                if val_str.is_empty() {
+                    headers.remove(&h_name);
+                } else if let Ok(h_val) = HeaderValue::try_from(val_str) {
+                    headers.insert(h_name, h_val);
+                }
             }
         }
     }
@@ -85,11 +92,12 @@ impl HeaderMutator {
         // 2. Apply custom header_down rules
         for (name, tmpl) in &self.header_down_set {
             let val_str = eval_placeholders(tmpl, ctx);
-            if let (Ok(h_name), Ok(h_val)) = (
-                HeaderName::try_from(name.as_str()),
-                HeaderValue::try_from(val_str),
-            ) {
-                headers.insert(h_name, h_val);
+            if let Ok(h_name) = HeaderName::try_from(name.as_str()) {
+                if val_str.is_empty() {
+                    headers.remove(&h_name);
+                } else if let Ok(h_val) = HeaderValue::try_from(val_str) {
+                    headers.insert(h_name, h_val);
+                }
             }
         }
     }
