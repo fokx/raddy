@@ -34,6 +34,7 @@ pub fn list_modules(as_json: bool) {
     let modules = vec![
         ("http.handlers.respond", "Synthesize static HTTP responses with status code and body"),
         ("http.handlers.file_server", "Static file server with index and directory browsing"),
+        ("http.handlers.forward_proxy", "Forward and CONNECT tunnel proxy with ACL, authentication, and probe resistance"),
         ("http.handlers.reverse_proxy", "Reverse proxy with dynamic load balancing and active health checks"),
         ("http.handlers.encode", "HTTP response body compression (gzip, zstd, deflate)"),
         ("http.handlers.templates", "MiniJinja dynamic template rendering with request context"),

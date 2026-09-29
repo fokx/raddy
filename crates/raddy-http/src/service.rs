@@ -11,7 +11,7 @@ use crate::router::VirtualHostRouter;
 
 /// Service handler for incoming Hyper HTTP requests.
 pub async fn handle_request(
-    req: Request<Incoming>,
+    mut req: Request<Incoming>,
     remote_addr: Option<SocketAddr>,
     router: Arc<VirtualHostRouter>,
     alt_svc_port: Option<u16>,
@@ -21,7 +21,9 @@ pub async fn handle_request(
     tls_server_name: Option<String>,
 ) -> std::result::Result<Response<Full<Bytes>>, std::convert::Infallible> {
     let start_time = std::time::Instant::now();
-    let (parts, incoming_body) = req.into_parts();
+    let on_upgrade = hyper::upgrade::on(&mut req);
+    let (mut parts, incoming_body) = req.into_parts();
+    parts.extensions.insert(on_upgrade);
 
     // Intercept ACME HTTP-01 challenge if present
     if parts.uri.path().starts_with("/.well-known/acme-challenge/") {
@@ -41,16 +43,21 @@ pub async fn handle_request(
         }
     }
 
-    // Read full incoming request body
-    let body_bytes = match incoming_body.collect().await {
-        Ok(collected) => collected.to_bytes(),
-        Err(e) => {
-            tracing::warn!("Failed to read incoming request body: {}", e);
-            Bytes::new()
+    // Read full incoming request body (skip for CONNECT since tunnel is upgraded)
+    let body_bytes = if parts.method == http::Method::CONNECT {
+        Bytes::new()
+    } else {
+        match incoming_body.collect().await {
+            Ok(collected) => collected.to_bytes(),
+            Err(e) => {
+                tracing::warn!("Failed to read incoming request body: {}", e);
+                Bytes::new()
+            }
         }
     };
 
     let mut ctx = Context::new(parts.method, parts.uri, parts.headers, body_bytes);
+    ctx.extensions = std::sync::Arc::new(std::sync::Mutex::new(parts.extensions));
     ctx.remote_addr = remote_addr;
     ctx.tls_server_name = tls_server_name;
     if !ctx.headers.contains_key(http::header::HOST) {

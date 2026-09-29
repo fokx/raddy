@@ -47,6 +47,7 @@ pub const DIRECTIVE_ORDER: &[&str] = &[
     "reverse_proxy",
     "php_fastcgi",
     "file_server",
+    "forward_proxy",
     "acme_server",
     "templates",
     "encode",
@@ -755,6 +756,181 @@ impl Adapter {
                 configs.push(cfg);
             }
 
+            "forward_proxy" => {
+                let mut basic_auth = Vec::new();
+                let mut hosts = Vec::new();
+                let mut ports = Vec::new();
+                let mut hide_ip = false;
+                let mut hide_via = false;
+                let mut disable_insecure_upstreams_check = false;
+                let mut probe_resistance = None;
+                let mut serve_pac = None;
+                let mut dial_timeout = None;
+                let mut max_idle_conns = None;
+                let mut max_idle_conns_per_host = None;
+                let mut upstream = None;
+                let mut acl = Vec::new();
+
+                if let Some(ref block) = dir.block {
+                    for sub in block {
+                        match sub.name.as_str() {
+                            "basic_auth" => {
+                                if sub.args.len() == 2 {
+                                    let user = &sub.args[0];
+                                    let pass = &sub.args[1];
+                                    use base64::engine::general_purpose::STANDARD as BASE64;
+                                    use base64::Engine;
+                                    let cred = BASE64.encode(format!("{}:{}", user, pass));
+                                    basic_auth.push(cred);
+                                }
+                            }
+                            "hosts" => {
+                                hosts.extend(sub.args.clone());
+                            }
+                            "ports" => {
+                                for p in &sub.args {
+                                    if let Ok(port_num) = p.parse::<u16>() {
+                                        ports.push(port_num);
+                                    }
+                                }
+                            }
+                            "hide_ip" => {
+                                hide_ip = true;
+                            }
+                            "hide_via" => {
+                                hide_via = true;
+                            }
+                            "disable_insecure_upstreams_check" => {
+                                disable_insecure_upstreams_check = true;
+                            }
+                            "probe_resistance" => {
+                                let domain = sub.args.first().cloned();
+                                probe_resistance = Some(serde_json::json!({
+                                    "domain": domain
+                                }));
+                            }
+                            "serve_pac" => {
+                                let pac = sub.matcher.clone()
+                                    .or_else(|| sub.args.first().cloned())
+                                    .unwrap_or_else(|| "/proxy.pac".to_string());
+                                serve_pac = Some(pac);
+                            }
+                            "dial_timeout" => {
+                                if let Some(arg) = sub.args.first() {
+                                    dial_timeout = Some(arg.clone());
+                                }
+                            }
+                            "max_idle_conns" => {
+                                if let Some(arg) = sub.args.first() {
+                                    if let Ok(v) = arg.parse::<i64>() {
+                                        max_idle_conns = Some(v);
+                                    }
+                                }
+                            }
+                            "max_idle_conns_per_host" => {
+                                if let Some(arg) = sub.args.first() {
+                                    if let Ok(v) = arg.parse::<i64>() {
+                                        max_idle_conns_per_host = Some(v);
+                                    }
+                                }
+                            }
+                            "upstream" => {
+                                if let Some(arg) = sub.args.first() {
+                                    upstream = Some(arg.clone());
+                                }
+                            }
+                            "acl" => {
+                                if let Some(ref acl_block) = sub.block {
+                                    for acl_dir in acl_block {
+                                        match acl_dir.name.as_str() {
+                                            "allow" => {
+                                                acl.push(serde_json::json!({
+                                                    "allow": true,
+                                                    "subjects": acl_dir.args.clone()
+                                                }));
+                                            }
+                                            "deny" => {
+                                                acl.push(serde_json::json!({
+                                                    "allow": false,
+                                                    "subjects": acl_dir.args.clone()
+                                                }));
+                                            }
+                                            "allow_file" => {
+                                                let file_path = acl_dir.matcher.clone().or_else(|| acl_dir.args.first().cloned());
+                                                if let Some(path) = file_path {
+                                                    if let Ok(lines) = read_file_lines(&path) {
+                                                        acl.push(serde_json::json!({
+                                                            "allow": true,
+                                                            "subjects": lines
+                                                        }));
+                                                    }
+                                                }
+                                            }
+                                            "deny_file" => {
+                                                let file_path = acl_dir.matcher.clone().or_else(|| acl_dir.args.first().cloned());
+                                                if let Some(path) = file_path {
+                                                    if let Ok(lines) = read_file_lines(&path) {
+                                                        acl.push(serde_json::json!({
+                                                            "allow": false,
+                                                            "subjects": lines
+                                                        }));
+                                                    }
+                                                }
+                                            }
+                                            _ => {}
+                                        }
+                                    }
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+
+                let mut cfg = HandlerConfig::new("forward_proxy");
+                if !basic_auth.is_empty() {
+                    cfg = cfg.with_field("auth_credentials", basic_auth);
+                }
+                if !hosts.is_empty() {
+                    cfg = cfg.with_field("hosts", hosts);
+                }
+                if !ports.is_empty() {
+                    cfg = cfg.with_field("ports", ports);
+                }
+                if hide_ip {
+                    cfg = cfg.with_field("hide_ip", true);
+                }
+                if hide_via {
+                    cfg = cfg.with_field("hide_via", true);
+                }
+                if disable_insecure_upstreams_check {
+                    cfg = cfg.with_field("disable_insecure_upstreams_check", true);
+                }
+                if let Some(pr) = probe_resistance {
+                    cfg = cfg.with_field("probe_resistance", pr);
+                }
+                if let Some(pac) = serve_pac {
+                    cfg = cfg.with_field("pac_path", pac);
+                }
+                if let Some(dt) = dial_timeout {
+                    cfg = cfg.with_field("dial_timeout", dt);
+                }
+                if let Some(mic) = max_idle_conns {
+                    cfg = cfg.with_field("max_idle_conns", mic);
+                }
+                if let Some(micph) = max_idle_conns_per_host {
+                    cfg = cfg.with_field("max_idle_conns_per_host", micph);
+                }
+                if let Some(u) = upstream {
+                    cfg = cfg.with_field("upstream", u);
+                }
+                if !acl.is_empty() {
+                    cfg = cfg.with_field("acl", acl);
+                }
+                configs.push(cfg);
+            }
+
+
             "encode" => {
                 let mut encodings = Vec::new();
                 if dir.args.is_empty() {
@@ -1378,6 +1554,19 @@ fn parse_size_bytes(s: &str) -> usize {
     }
 }
 
+fn read_file_lines(path: &str) -> std::io::Result<Vec<String>> {
+    let file = std::fs::File::open(path)?;
+    let reader = std::io::BufReader::new(file);
+    let mut lines = Vec::new();
+    for line in std::io::BufRead::lines(reader) {
+        let line = line?;
+        let trimmed = line.trim();
+        if !trimmed.is_empty() && !trimmed.starts_with('#') {
+            lines.push(trimmed.to_string());
+        }
+    }
+    Ok(lines)
+}
 
 #[derive(Debug, Clone)]
 struct ParsedAddress {

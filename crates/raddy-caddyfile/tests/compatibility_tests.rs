@@ -323,5 +323,83 @@ xjtu.app, xjtu.men, kr.pig2.de {
     assert!(m3.method.is_none());
 }
 
+#[test]
+fn test_caddyfile_forward_proxy_adaptation() {
+    let input = r#"
+:8443 {
+    forward_proxy {
+        basic_auth user1 password123
+        ports 80 443
+        hide_ip
+        hide_via
+        disable_insecure_upstreams_check
+        probe_resistance secret.domain.com
+        serve_pac /my-proxy.pac
+        dial_timeout 15s
+        max_idle_conns 100
+        max_idle_conns_per_host 5
+        upstream https://proxy-user:proxy-pass@next-hop.com:443
+        acl {
+            allow *.caddyserver.com
+            deny 192.168.0.0/16
+            allow all
+        }
+    }
+}
+"#;
+    let config = adapt_caddyfile(input, ".").expect("Failed to adapt forward proxy Caddyfile");
+    let http = config.http_app().unwrap();
+    let srv = http.servers.get("srv_:8443").unwrap();
+    assert_eq!(srv.routes.len(), 1);
+
+    let handler_cfg = &srv.routes[0].handle[0];
+    assert_eq!(handler_cfg.handler, "forward_proxy");
+    assert_eq!(handler_cfg.details.get("hide_ip").unwrap(), &true);
+    assert_eq!(handler_cfg.details.get("hide_via").unwrap(), &true);
+    assert_eq!(
+        handler_cfg.details.get("disable_insecure_upstreams_check").unwrap(),
+        &true
+    );
+    assert_eq!(
+        handler_cfg.details.get("pac_path").unwrap(),
+        &"/my-proxy.pac"
+    );
+    assert_eq!(
+        handler_cfg.details.get("dial_timeout").unwrap(),
+        &"15s"
+    );
+    assert_eq!(handler_cfg.details.get("max_idle_conns").unwrap(), &100);
+    assert_eq!(
+        handler_cfg.details.get("max_idle_conns_per_host").unwrap(),
+        &5
+    );
+    assert_eq!(
+        handler_cfg.details.get("upstream").unwrap(),
+        &"https://proxy-user:proxy-pass@next-hop.com:443"
+    );
+
+    let pr = handler_cfg.details.get("probe_resistance").unwrap();
+    assert_eq!(pr.get("domain").unwrap(), &"secret.domain.com");
+
+    let creds = handler_cfg
+        .details
+        .get("auth_credentials")
+        .unwrap()
+        .as_array()
+        .unwrap();
+    assert_eq!(creds.len(), 1);
+
+    let ports = handler_cfg
+        .details
+        .get("ports")
+        .unwrap()
+        .as_array()
+        .unwrap();
+    assert_eq!(ports.len(), 2);
+
+    let acl = handler_cfg.details.get("acl").unwrap().as_array().unwrap();
+    assert_eq!(acl.len(), 3);
+}
+
 
 

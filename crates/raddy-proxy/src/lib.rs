@@ -4,6 +4,7 @@
 //! and retry policies.
 
 pub mod error;
+pub mod forward;
 pub mod headers;
 pub mod health;
 pub mod load_balancer;
@@ -12,6 +13,10 @@ pub mod transport;
 pub mod upstream;
 
 pub use error::{ProxyError, Result};
+pub use forward::{
+    AclDecision, AclRule, AclRuleConfig, AuthConfig, AuthError, ForwardProxyConfig,
+    ForwardProxyHandler, ProbeResistanceConfig, UpstreamProxy,
+};
 pub use headers::HeaderMutator;
 pub use health::{ActiveHealthConfig, PassiveHealthConfig};
 pub use load_balancer::{parse_load_balancer, LoadBalancer, RoundRobin, LeastConn, IpHash, UriHash, Random, First};

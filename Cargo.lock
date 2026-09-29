@@ -1630,6 +1630,7 @@ name = "raddy-caddyfile"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
  "glob",
  "raddy-core",
  "regex",
@@ -1704,18 +1705,26 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "base64 0.22.1",
  "bytes",
  "http",
  "http-body-util",
  "hyper",
  "hyper-util",
+ "ipnet",
  "parking_lot",
  "raddy-core",
+ "rustls",
+ "rustls-native-certs",
+ "rustls-pki-types",
  "serde",
  "serde_json",
+ "subtle",
  "thiserror",
  "tokio",
+ "tokio-rustls",
  "tracing",
+ "url",
 ]
 
 [[package]]

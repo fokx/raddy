@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::net::SocketAddr;
+use std::sync::{Arc, Mutex};
 use http::{HeaderMap, HeaderValue, Method, StatusCode, Uri};
 use bytes::Bytes;
 use crate::placeholder::PlaceholderProvider;
@@ -15,6 +16,7 @@ pub struct Context {
     pub remote_addr: Option<SocketAddr>,
     pub tls_server_name: Option<String>,
     pub body: Bytes,
+    pub extensions: Arc<Mutex<http::Extensions>>,
 
     // Variables set by middleware/directives (e.g. `vars`, `root`, etc.)
     pub vars: HashMap<String, String>,
@@ -54,6 +56,7 @@ impl Context {
             remote_addr: None,
             tls_server_name: None,
             body,
+            extensions: Arc::new(Mutex::new(http::Extensions::new())),
             vars: HashMap::new(),
             status: None,
             response_headers: HeaderMap::new(),
@@ -62,6 +65,20 @@ impl Context {
             log_skip: false,
             log_name: None,
             log_appends: HashMap::new(),
+        }
+    }
+
+    pub fn get_extension<T: Clone + Send + Sync + 'static>(&self) -> Option<T> {
+        self.extensions.lock().ok()?.get::<T>().cloned()
+    }
+
+    pub fn remove_extension<T: Send + Sync + 'static>(&self) -> Option<T> {
+        self.extensions.lock().ok()?.remove::<T>()
+    }
+
+    pub fn insert_extension<T: Clone + Send + Sync + 'static>(&self, val: T) {
+        if let Ok(mut ext) = self.extensions.lock() {
+            ext.insert(val);
         }
     }
 
