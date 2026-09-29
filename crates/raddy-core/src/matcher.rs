@@ -3,8 +3,17 @@ use std::net::IpAddr;
 use ipnet::IpNet;
 use regex::Regex;
 use crate::context::Context;
-use crate::config::MatcherSet;
-use crate::placeholder::{PlaceholderProvider, Replacer};
+use crate::config::{MatcherSet, FileMatcherConfig};
+use crate::placeholder::{eval_placeholders, PlaceholderProvider, Replacer};
+
+pub const PRIVATE_RANGES: &[&str] = &[
+    "192.168.0.0/16",
+    "172.16.0.0/12",
+    "10.0.0.0/8",
+    "127.0.0.1/8",
+    "fd00::/8",
+    "::1",
+];
 
 pub trait Matcher: Send + Sync {
     fn matches(&self, ctx: &Context) -> bool;
@@ -380,6 +389,132 @@ impl Matcher for RemoteIpMatcher {
     }
 }
 
+/// Matches request protocol (http, https, grpc).
+#[derive(Debug, Clone)]
+pub struct ProtocolMatcher {
+    pub protocol: String,
+}
+
+impl ProtocolMatcher {
+    pub fn new(protocol: String) -> Self {
+        Self { protocol: protocol.to_lowercase() }
+    }
+}
+
+impl Matcher for ProtocolMatcher {
+    fn matches(&self, ctx: &Context) -> bool {
+        let scheme = ctx.get_placeholder("scheme").unwrap_or_else(|| "http".to_string()).to_lowercase();
+        if self.protocol == "http" {
+            scheme == "http"
+        } else if self.protocol == "https" {
+            scheme == "https" || ctx.tls_server_name.is_some()
+        } else if self.protocol == "grpc" {
+            let content_type = ctx.headers.get(http::header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).unwrap_or("");
+            content_type.starts_with("application/grpc")
+        } else {
+            scheme == self.protocol
+        }
+    }
+}
+
+/// Matches arbitrary request variables.
+#[derive(Debug, Clone)]
+pub struct VarsMatcher {
+    pub vars: HashMap<String, String>,
+}
+
+impl VarsMatcher {
+    pub fn new(vars: HashMap<String, String>) -> Self {
+        Self { vars }
+    }
+}
+
+impl Matcher for VarsMatcher {
+    fn matches(&self, ctx: &Context) -> bool {
+        for (k, expected) in &self.vars {
+            let clean_k = k.strip_prefix('{').and_then(|s| s.strip_suffix('}')).unwrap_or(k);
+            let actual = ctx.get_placeholder(clean_k).or_else(|| ctx.vars.get(clean_k).cloned());
+            match actual {
+                Some(ref val) => {
+                    let exp = eval_placeholders(expected, ctx);
+                    if val != &exp {
+                        return false;
+                    }
+                }
+                None => return false,
+            }
+        }
+        true
+    }
+}
+
+/// Matches arbitrary request variables using regular expressions.
+#[derive(Debug, Clone)]
+pub struct VarsRegexpMatcher {
+    pub patterns: HashMap<String, Regex>,
+}
+
+impl VarsRegexpMatcher {
+    pub fn new(patterns: HashMap<String, String>) -> std::result::Result<Self, regex::Error> {
+        let mut compiled = HashMap::new();
+        for (k, v) in patterns {
+            compiled.insert(k, Regex::new(&v)?);
+        }
+        Ok(Self { patterns: compiled })
+    }
+}
+
+impl Matcher for VarsRegexpMatcher {
+    fn matches(&self, ctx: &Context) -> bool {
+        for (k, re) in &self.patterns {
+            let clean_k = k.strip_prefix('{').and_then(|s| s.strip_suffix('}')).unwrap_or(k);
+            let actual = ctx.get_placeholder(clean_k).or_else(|| ctx.vars.get(clean_k).cloned()).unwrap_or_default();
+            if !re.is_match(&actual) {
+                return false;
+            }
+        }
+        true
+    }
+}
+
+/// Matches file existence on the local filesystem.
+#[derive(Debug, Clone)]
+pub struct FileMatcher {
+    pub config: FileMatcherConfig,
+}
+
+impl FileMatcher {
+    pub fn new(config: FileMatcherConfig) -> Self {
+        Self { config }
+    }
+}
+
+impl Matcher for FileMatcher {
+    fn matches(&self, ctx: &Context) -> bool {
+        let root = self.config.root.as_deref()
+            .or_else(|| ctx.get_var("root"))
+            .unwrap_or(".");
+        let root_path = std::path::Path::new(root);
+
+        for pat in &self.config.try_files {
+            let evaluated = eval_placeholders(pat, ctx);
+            let clean_pat = evaluated.trim_start_matches('/');
+            let target_path = root_path.join(clean_pat);
+
+            let matched = if evaluated.ends_with('/') {
+                target_path.is_dir()
+            } else {
+                target_path.is_file() || target_path.exists()
+            };
+
+            if matched {
+                return true;
+            }
+        }
+        false
+    }
+}
+
 /// Inverted matcher (NOT).
 pub struct NotMatcher {
     pub inner: Box<dyn Matcher>,
@@ -408,6 +543,14 @@ impl CompiledMatcherSet {
             matchers.push(Box::new(PathMatcher::new(paths.clone())));
         }
 
+        if let Some(ref re_list) = config.path_regexp {
+            for re_m in re_list {
+                if let Ok(m) = PathRegexpMatcher::new(&re_m.pattern) {
+                    matchers.push(Box::new(m));
+                }
+            }
+        }
+
         if let Some(ref methods) = config.method {
             matchers.push(Box::new(MethodMatcher::new(methods.clone())));
         }
@@ -418,8 +561,52 @@ impl CompiledMatcherSet {
             }));
         }
 
+        if let Some(ref re_map) = config.header_regexp {
+            let mut patterns = HashMap::new();
+            for (k, v) in re_map {
+                patterns.insert(k.clone(), v.pattern.clone());
+            }
+            if let Ok(m) = HeaderRegexpMatcher::new(patterns) {
+                matchers.push(Box::new(m));
+            }
+        }
+
+        if let Some(ref query_map) = config.query {
+            matchers.push(Box::new(QueryMatcher::new(query_map.clone())));
+        }
+
+        if let Some(ref proto) = config.protocol {
+            matchers.push(Box::new(ProtocolMatcher::new(proto.clone())));
+        }
+
         if let Some(ref remote_ip) = config.remote_ip {
             matchers.push(Box::new(RemoteIpMatcher::parse(&remote_ip.ranges)));
+        }
+
+        if let Some(ref client_ip) = config.client_ip {
+            let mut expanded = Vec::new();
+            for r in &client_ip.ranges {
+                if r == "private_ranges" {
+                    expanded.extend(PRIVATE_RANGES.iter().map(|s| s.to_string()));
+                } else {
+                    expanded.push(r.clone());
+                }
+            }
+            matchers.push(Box::new(RemoteIpMatcher::parse(&expanded)));
+        }
+
+        if let Some(ref vars_map) = config.vars {
+            matchers.push(Box::new(VarsMatcher::new(vars_map.clone())));
+        }
+
+        if let Some(ref vars_re) = config.vars_regexp {
+            if let Ok(m) = VarsRegexpMatcher::new(vars_re.clone()) {
+                matchers.push(Box::new(m));
+            }
+        }
+
+        if let Some(ref file_cfg) = config.file {
+            matchers.push(Box::new(FileMatcher::new(file_cfg.clone())));
         }
 
         if let Some(ref not_sets) = config.not {

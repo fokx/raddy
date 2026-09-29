@@ -203,3 +203,86 @@ async fn run_server_loop(
     tracing::info!("Raddy server stopped.");
     Ok(())
 }
+
+/// Executes `raddy respond` quick launch command.
+pub async fn respond_command(
+    listen: &str,
+    status: u16,
+    body: &str,
+    headers: &[String],
+    access_log: bool,
+) -> Result<()> {
+    let mut header_lines = String::new();
+    for h in headers {
+        if let Some((k, v)) = h.split_once(':') {
+            header_lines.push_str(&format!("\theader \"{}\" \"{}\"\n", k.trim(), v.trim()));
+        } else {
+            header_lines.push_str(&format!("\theader {}\n", h));
+        }
+    }
+
+    let log_str = if access_log { "log" } else { "" };
+    let caddyfile_content = format!(
+        "{listen} {{\n{header_lines}\trespond \"{body}\" {status}\n\t{log_str}\n}}\n",
+        listen = listen,
+        header_lines = header_lines,
+        body = body,
+        status = status,
+        log_str = log_str,
+    );
+
+    let config = adapt_caddyfile(&caddyfile_content, Path::new("."))
+        .map_err(|e| anyhow::anyhow!("Failed to compile respond config: {}", e))?;
+
+    tracing::info!("Starting instant respond server on http://{}", listen);
+    run_server_loop(config, Path::new(""), None, false).await
+}
+
+/// Executes `raddy reverse-proxy` quick launch command.
+pub async fn reverse_proxy_command(
+    from: &str,
+    to: &[String],
+    headers_up: &[String],
+    headers_down: &[String],
+    insecure_skip_verify: bool,
+    access_log: bool,
+) -> Result<()> {
+    let mut up_lines = String::new();
+    for h in headers_up {
+        if let Some((k, v)) = h.split_once(':') {
+            up_lines.push_str(&format!("\t\theader_up \"{}\" \"{}\"\n", k.trim(), v.trim()));
+        }
+    }
+
+    let mut down_lines = String::new();
+    for h in headers_down {
+        if let Some((k, v)) = h.split_once(':') {
+            down_lines.push_str(&format!("\t\theader_down \"{}\" \"{}\"\n", k.trim(), v.trim()));
+        }
+    }
+
+    let tls_skip = if insecure_skip_verify {
+        "\t\ttransport http {\n\t\t\ttls_insecure_skip_verify\n\t\t}\n"
+    } else {
+        ""
+    };
+
+    let log_str = if access_log { "log" } else { "" };
+    let to_str = to.join(" ");
+
+    let caddyfile_content = format!(
+        "{from} {{\n\treverse_proxy {to_str} {{\n{up_lines}{down_lines}{tls_skip}\t}}\n\t{log_str}\n}}\n",
+        from = from,
+        to_str = to_str,
+        up_lines = up_lines,
+        down_lines = down_lines,
+        tls_skip = tls_skip,
+        log_str = log_str,
+    );
+
+    let config = adapt_caddyfile(&caddyfile_content, Path::new("."))
+        .map_err(|e| anyhow::anyhow!("Failed to compile reverse-proxy config: {}", e))?;
+
+    tracing::info!("Starting instant reverse proxy from http://{} to {}", from, to_str);
+    run_server_loop(config, Path::new(""), None, false).await
+}

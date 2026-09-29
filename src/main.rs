@@ -159,6 +159,73 @@ enum Commands {
         #[arg(short, long)]
         access_log: bool,
     },
+
+    /// Hashes a password and writes the output
+    #[command(name = "hash-password")]
+    HashPassword {
+        /// The plaintext password to hash
+        #[arg(short, long)]
+        plaintext: Option<String>,
+
+        /// The hashing algorithm (bcrypt)
+        #[arg(short, long, default_value = "bcrypt")]
+        algorithm: String,
+
+        /// Cost factor for the algorithm
+        #[arg(short, long)]
+        cost: Option<u32>,
+    },
+
+    /// Instant zero-config HTTP response server
+    Respond {
+        /// Address to listen on
+        #[arg(short, long, default_value = "127.0.0.1:8000")]
+        listen: String,
+
+        /// The HTTP status code
+        #[arg(short, long, default_value_t = 200)]
+        status: u16,
+
+        /// Custom response header (can be used multiple times)
+        #[arg(short = 'H', long = "header")]
+        headers: Vec<String>,
+
+        /// Enable request access logging
+        #[arg(short, long)]
+        access_log: bool,
+
+        /// Body content to respond with
+        #[arg(default_value = "")]
+        body: String,
+    },
+
+    /// Instant zero-config reverse proxy server
+    #[command(name = "reverse-proxy")]
+    ReverseProxy {
+        /// Address on which to listen
+        #[arg(short, long, default_value = "127.0.0.1:8000")]
+        from: String,
+
+        /// Upstream address(es) to proxy to
+        #[arg(short, long, required = true, num_args = 1..)]
+        to: Vec<String>,
+
+        /// Header to send to upstream (header_up)
+        #[arg(long = "header-up")]
+        headers_up: Vec<String>,
+
+        /// Header to send down to client (header_down)
+        #[arg(long = "header-down")]
+        headers_down: Vec<String>,
+
+        /// Disable upstream TLS certificate verification
+        #[arg(long = "insecure")]
+        insecure: bool,
+
+        /// Enable request access logging
+        #[arg(short, long)]
+        access_log: bool,
+    },
 }
 
 #[tokio::main]
@@ -257,6 +324,47 @@ async fn main() -> anyhow::Result<()> {
             access_log,
         } => {
             commands::run::file_server_command(&listen, &root, browse, access_log).await?;
+        }
+
+        Commands::HashPassword {
+            plaintext,
+            algorithm,
+            cost,
+        } => {
+            commands::hash_password::hash_password_command(
+                plaintext,
+                Some(&algorithm),
+                cost,
+            )?;
+        }
+
+        Commands::Respond {
+            listen,
+            status,
+            headers,
+            access_log,
+            body,
+        } => {
+            commands::run::respond_command(&listen, status, &body, &headers, access_log).await?;
+        }
+
+        Commands::ReverseProxy {
+            from,
+            to,
+            headers_up,
+            headers_down,
+            insecure,
+            access_log,
+        } => {
+            commands::run::reverse_proxy_command(
+                &from,
+                &to,
+                &headers_up,
+                &headers_down,
+                insecure,
+                access_log,
+            )
+            .await?;
         }
     }
 

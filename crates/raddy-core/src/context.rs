@@ -10,6 +10,7 @@ use crate::placeholder::PlaceholderProvider;
 pub struct Context {
     // Request metadata
     pub method: Method,
+    pub orig_method: Method,
     pub uri: Uri,
     pub orig_uri: Uri,
     pub headers: HeaderMap,
@@ -47,9 +48,11 @@ impl Context {
                 }
             }
         }
+        let orig_method = method.clone();
         let orig_uri = uri.clone();
         Self {
             method,
+            orig_method,
             uri,
             orig_uri,
             headers,
@@ -226,6 +229,83 @@ impl PlaceholderProvider for Context {
                 let val = self.response_headers.get(header_name).and_then(|v| v.to_str().ok()).unwrap_or("").to_string();
                 Some(val)
             }
+
+            "dir" | "http.request.uri.path.dir" => {
+                let p = self.uri.path();
+                let dir = std::path::Path::new(p)
+                    .parent()
+                    .and_then(|parent| parent.to_str())
+                    .unwrap_or("/");
+                Some(dir.to_string())
+            }
+
+            "file" | "http.request.uri.path.file" => {
+                let p = self.uri.path();
+                let file = std::path::Path::new(p)
+                    .file_name()
+                    .and_then(|f| f.to_str())
+                    .unwrap_or("");
+                Some(file.to_string())
+            }
+
+            "file.base" | "http.request.uri.path.file.base" => {
+                let p = self.uri.path();
+                let stem = std::path::Path::new(p)
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("");
+                Some(stem.to_string())
+            }
+
+            "file.ext" | "http.request.uri.path.file.ext" => {
+                let p = self.uri.path();
+                let ext = std::path::Path::new(p)
+                    .extension()
+                    .and_then(|e| e.to_str());
+                ext.map(|e| format!(".{}", e))
+            }
+
+            "orig_method" | "http.request.orig_method" => Some(self.orig_method.as_str().to_string()),
+
+            k if k.starts_with("cookie.") || k.starts_with("http.request.cookie.") => {
+                let cookie_name = if let Some(stripped) = k.strip_prefix("cookie.") {
+                    stripped
+                } else {
+                    k.strip_prefix("http.request.cookie.").unwrap_or(k)
+                };
+                let cookie_hdr = self.headers.get(http::header::COOKIE).and_then(|v| v.to_str().ok()).unwrap_or("");
+                for pair in cookie_hdr.split(';') {
+                    let mut parts = pair.trim().splitn(2, '=');
+                    if let (Some(name), Some(val)) = (parts.next(), parts.next()) {
+                        if name == cookie_name {
+                            return Some(val.to_string());
+                        }
+                    }
+                }
+                None
+            }
+
+            k if k.starts_with("labels.") || k.starts_with("http.request.host.labels.") => {
+                let idx_str = if let Some(stripped) = k.strip_prefix("labels.") {
+                    stripped
+                } else {
+                    k.strip_prefix("http.request.host.labels.").unwrap_or(k)
+                };
+                if let Ok(idx) = idx_str.parse::<usize>() {
+                    let host = self.get_placeholder("host").unwrap_or_default();
+                    let parts: Vec<&str> = host.split('.').collect();
+                    if let Some(label) = parts.iter().rev().nth(idx) {
+                        return Some(label.to_string());
+                    }
+                }
+                None
+            }
+
+            "err.status_code" => self.vars.get("err.status_code").cloned().or_else(|| self.status.map(|s| s.as_u16().to_string())),
+            "err.status_text" => self.vars.get("err.status_text").cloned().or_else(|| self.status.and_then(|s| s.canonical_reason().map(|r| r.to_string()))),
+            "err.message" => self.vars.get("err.message").cloned(),
+
+            "file_match.relative" | "http.matchers.file.relative" => self.vars.get("file_match.relative").cloned(),
 
             k if k.starts_with("vars.") => {
                 let var_name = k.strip_prefix("vars.")?;

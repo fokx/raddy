@@ -1732,7 +1732,11 @@ name = "raddy-server"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "axum",
+ "bcrypt",
+ "bytes",
  "clap",
+ "http",
  "notify",
  "raddy-admin",
  "raddy-caddyfile",
@@ -1744,6 +1748,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+ "tower",
  "tracing",
  "tracing-subscriber",
 ]

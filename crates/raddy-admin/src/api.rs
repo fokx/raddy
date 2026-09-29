@@ -17,6 +17,7 @@ pub fn build_admin_router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/", get(get_status))
         .route("/load", post(post_load))
+        .route("/adapt", post(post_adapt))
         .route("/stop", post(post_stop))
         .route("/config/", get(get_config))
         .route("/config", get(get_config))
@@ -24,9 +25,11 @@ pub fn build_admin_router(state: Arc<AppState>) -> Router {
             "/config/{*path}",
             get(get_config_path)
                 .post(post_config_path)
+                .put(post_config_path)
                 .patch(patch_config_path)
                 .delete(delete_config_path),
         )
+        .route("/reverse_proxy/upstreams", get(get_upstreams))
         .route("/pki/ca/local", get(get_local_ca))
         .with_state(state)
 }
@@ -169,4 +172,40 @@ async fn get_local_ca(State(state): State<Arc<AppState>>) -> Result<impl IntoRes
     } else {
         Err(AdminError::NotFound("TLS Manager or Local CA not active".into()))
     }
+}
+
+async fn post_adapt(
+    _headers: HeaderMap,
+    body: Bytes,
+) -> Result<Response> {
+    let text = std::str::from_utf8(&body)
+        .map_err(|e| AdminError::BadRequest(format!("Invalid UTF-8: {}", e)))?;
+    let ast = parse_caddyfile(text)
+        .map_err(|e| AdminError::BadRequest(format!("Failed to parse Caddyfile: {}", e)))?;
+    let mut adapter = Adapter::new();
+    let adapted = adapter.adapt(&ast)
+        .map_err(|e| AdminError::BadRequest(format!("Failed to adapt Caddyfile: {}", e)))?;
+    let json_val = serde_json::to_value(&adapted)?;
+    Ok(Json(json_val).into_response())
+}
+
+async fn get_upstreams(State(state): State<Arc<AppState>>) -> Result<impl IntoResponse> {
+    let current_config = state.config.load();
+    let mut upstreams = Vec::new();
+    if let Some(http) = current_config.http_app() {
+        for server in http.servers.values() {
+            for route in &server.routes {
+                for handler in &route.handle {
+                    if handler.handler == "reverse_proxy" {
+                        if let Some(arr) = handler.details.get("upstreams").and_then(|v| v.as_array()) {
+                            for u in arr {
+                                upstreams.push(u.clone());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Ok(Json(upstreams))
 }

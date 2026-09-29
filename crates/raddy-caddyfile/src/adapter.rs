@@ -70,6 +70,7 @@ pub struct Adapter {
     handle_group_counter: usize,
     named_routes: HashMap<String, NamedRouteNode>,
     server_options: Vec<ServerGlobalOptions>,
+    default_bind: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -114,6 +115,7 @@ impl Adapter {
             handle_group_counter: 0,
             named_routes: HashMap::new(),
             server_options: Vec::new(),
+            default_bind: None,
         }
     }
 
@@ -251,6 +253,9 @@ impl Adapter {
                     let logging = self.logging.get_or_insert_with(LoggingConfig::default);
                     logging.logs.insert(log_name, log_cfg);
                 }
+                "default_bind" => {
+                    self.default_bind = Some(opt.args.clone());
+                }
                 "servers" => {
                     let mut srv_opt = ServerGlobalOptions::default();
                     if let Some(arg) = opt.args.first() {
@@ -334,6 +339,8 @@ impl Adapter {
         let mut regular_directives: Vec<DirectiveNode> = Vec::new();
         let mut site_tls_policy: Option<TlsConnectionPolicy> = None;
         let mut site_log_dirs: Vec<DirectiveNode> = Vec::new();
+        let mut site_bind_hosts: Vec<String> = Vec::new();
+        let mut handle_errors_dirs: Vec<DirectiveNode> = Vec::new();
 
         for dir in &site.directives {
             if dir.name.starts_with('@') {
@@ -344,8 +351,18 @@ impl Adapter {
                 site_tls_policy = Some(parse_tls_directive(dir)?);
             } else if dir.name == "log" {
                 site_log_dirs.push(dir.clone());
+            } else if dir.name == "bind" {
+                site_bind_hosts.extend(dir.args.clone());
+            } else if dir.name == "handle_errors" {
+                handle_errors_dirs.push(dir.clone());
             } else {
                 regular_directives.push(dir.clone());
+            }
+        }
+
+        if site_bind_hosts.is_empty() {
+            if let Some(ref db) = self.default_bind {
+                site_bind_hosts.extend(db.clone());
             }
         }
 
@@ -409,15 +426,27 @@ impl Adapter {
         // Each address in site.addresses maps to a parsed address
         for addr_str in &site.addresses {
             let parsed_addr = parse_site_address(addr_str, self.http_port, self.https_port)?;
-            let server_key = format!("srv_{}", parsed_addr.listen);
+            let listens = if !site_bind_hosts.is_empty() {
+                let port_str = if let Some(idx) = parsed_addr.listen.rfind(':') {
+                    &parsed_addr.listen[idx..]
+                } else {
+                    ":80"
+                };
+                site_bind_hosts.iter().map(|h| format!("{}{}", h, port_str)).collect::<Vec<_>>()
+            } else {
+                vec![parsed_addr.listen.clone()]
+            };
+
+            let server_key = format!("srv_{}", listens.join(","));
 
             let server = servers.entry(server_key).or_insert_with(|| HttpServer {
-                listen: vec![parsed_addr.listen.clone()],
+                listen: listens,
                 routes: Vec::new(),
                 tls_connection_policies: None,
                 automatic_https: self.auto_https.clone(),
                 protocols: None,
                 logs: None,
+                errors: None,
             });
 
             for sl in &site_loggers {
@@ -467,6 +496,31 @@ impl Adapter {
                     route.group = Some(handle_group_id.clone());
                 }
                 server.routes.push(route);
+            }
+
+            // Attach handle_errors routes if present
+            if !handle_errors_dirs.is_empty() {
+                let errors_cfg = server.errors.get_or_insert_with(HttpErrorsConfig::default);
+                for dir in &handle_errors_dirs {
+                    let mut matchers = None;
+                    if !dir.args.is_empty() {
+                        let mut vars_map = HashMap::new();
+                        vars_map.insert("err.status_code".to_string(), dir.args.join(" "));
+                        matchers = Some(vec![MatcherSet {
+                            vars: Some(vars_map),
+                            ..Default::default()
+                        }]);
+                    }
+                    if let Some(ref block) = dir.block {
+                        for sub in block {
+                            let mut sub_route = self.adapt_directive(sub, &host_matchers, None, &named_matchers)?;
+                            if matchers.is_some() {
+                                sub_route.r#match = matchers.clone();
+                            }
+                            errors_cfg.routes.push(sub_route);
+                        }
+                    }
+                }
             }
         }
 
@@ -636,37 +690,92 @@ impl Adapter {
                 configs.push(cfg);
             }
 
+            "method" => {
+                let method = dir.args.first().cloned().unwrap_or_default();
+                let cfg = HandlerConfig::new("method").with_field("method", method);
+                configs.push(cfg);
+            }
+
+            "vars" => {
+                let mut vars = HashMap::new();
+                if dir.args.len() >= 2 {
+                    vars.insert(dir.args[0].clone(), dir.args[1..].join(" "));
+                }
+                if let Some(ref block) = dir.block {
+                    for sub in block {
+                        vars.insert(sub.name.clone(), sub.args.join(" "));
+                    }
+                }
+                let cfg = HandlerConfig::new("vars").with_field("vars", vars);
+                configs.push(cfg);
+            }
+
+            "try_files" => {
+                let files = dir.args.clone();
+                let cfg = HandlerConfig::new("try_files").with_field("try_files", files);
+                configs.push(cfg);
+            }
+
+            "php_fastcgi" => {
+                let try_files = vec!["{path}".to_string(), "{path}/index.php".to_string(), "index.php".to_string()];
+                configs.push(HandlerConfig::new("try_files").with_field("try_files", try_files));
+
+                let mut upstreams = Vec::new();
+                for arg in &dir.args {
+                    upstreams.push(json_upstream(arg));
+                }
+                if let Some(ref block) = dir.block {
+                    for sub in block {
+                        if sub.name == "to" {
+                            for arg in &sub.args {
+                                upstreams.push(json_upstream(arg));
+                            }
+                        }
+                    }
+                }
+                let cfg = HandlerConfig::new("reverse_proxy")
+                    .with_field("upstreams", upstreams)
+                    .with_field("fastcgi", true);
+                configs.push(cfg);
+            }
+
             "header" | "request_header" => {
                 let is_request = dir.name == "request_header";
                 let mut set_headers = HashMap::new();
+                let mut default_headers = HashMap::new();
                 let mut delete_headers = Vec::new();
 
-                if let Some(name) = dir.args.first() {
+                let process_header_item = |name: &str, args: &[String], set_map: &mut HashMap<String, String>, def_map: &mut HashMap<String, String>, del_list: &mut Vec<String>| {
                     if let Some(stripped) = name.strip_prefix('-') {
-                        delete_headers.push(stripped.to_string());
-                    } else if dir.args.len() > 1 {
+                        del_list.push(stripped.to_string());
+                    } else if let Some(stripped) = name.strip_prefix('?') {
+                        if !args.is_empty() {
+                            def_map.insert(stripped.to_string(), args.join(" "));
+                        }
+                    } else if !args.is_empty() {
                         let clean_name = name.strip_prefix('+').unwrap_or(name);
-                        set_headers.insert(clean_name.to_string(), dir.args[1..].join(" "));
+                        set_map.insert(clean_name.to_string(), args.join(" "));
                     }
+                };
+
+                if let Some(name) = dir.args.first() {
+                    process_header_item(name, &dir.args[1..], &mut set_headers, &mut default_headers, &mut delete_headers);
                 }
 
                 if let Some(ref block) = dir.block {
                     for sub in block {
-                        if let Some(stripped) = sub.name.strip_prefix('-') {
-                            delete_headers.push(stripped.to_string());
-                        } else if !sub.args.is_empty() {
-                            let clean_name = sub.name.strip_prefix('+').unwrap_or(&sub.name);
-                            set_headers.insert(clean_name.to_string(), sub.args.join(" "));
-                        }
+                        process_header_item(&sub.name, &sub.args, &mut set_headers, &mut default_headers, &mut delete_headers);
                     }
                 }
 
                 let mut cfg = HandlerConfig::new("headers");
                 if is_request {
                     cfg = cfg.with_field("set_request_headers", set_headers)
+                             .with_field("default_request_headers", default_headers)
                              .with_field("delete_request_headers", delete_headers);
                 } else {
                     cfg = cfg.with_field("set_response_headers", set_headers)
+                             .with_field("default_response_headers", default_headers)
                              .with_field("delete_response_headers", delete_headers);
                 }
                 configs.push(cfg);
@@ -1222,6 +1331,7 @@ impl Adapter {
             automatic_https: self.auto_https.clone(),
             protocols: None,
             logs: None,
+            errors: None,
         });
 
         if !disable_redirects {
@@ -1657,6 +1767,24 @@ fn populate_named_matcher_item(set: &mut MatcherSet, name: &str, args: &[String]
         "path" => {
             set.path = Some(args.to_vec());
         }
+        "path_regexp" => {
+            let item = if args.len() == 1 {
+                RegexpMatcher {
+                    name: None,
+                    pattern: args[0].clone(),
+                }
+            } else if args.len() >= 2 {
+                RegexpMatcher {
+                    name: Some(args[0].clone()),
+                    pattern: args[1].clone(),
+                }
+            } else {
+                return;
+            };
+            let mut existing = set.path_regexp.take().unwrap_or_default();
+            existing.push(item);
+            set.path_regexp = Some(existing);
+        }
         "method" => {
             let methods = args.iter().map(|m| m.to_uppercase()).collect();
             set.method = Some(methods);
@@ -1668,10 +1796,72 @@ fn populate_named_matcher_item(set: &mut MatcherSet, name: &str, args: &[String]
                 set.header = Some(hdr);
             }
         }
+        "header_regexp" => {
+            if args.len() == 2 {
+                let mut re_map = set.header_regexp.clone().unwrap_or_default();
+                re_map.insert(args[0].clone(), RegexpMatcher {
+                    name: None,
+                    pattern: args[1].clone(),
+                });
+                set.header_regexp = Some(re_map);
+            } else if args.len() >= 3 {
+                let mut re_map = set.header_regexp.clone().unwrap_or_default();
+                re_map.insert(args[1].clone(), RegexpMatcher {
+                    name: Some(args[0].clone()),
+                    pattern: args[2].clone(),
+                });
+                set.header_regexp = Some(re_map);
+            }
+        }
+        "query" => {
+            let mut q_map = set.query.clone().unwrap_or_default();
+            for arg in args {
+                if let Some((k, v)) = arg.split_once('=') {
+                    q_map.entry(k.to_string()).or_default().push(v.to_string());
+                } else if args.len() == 2 && q_map.is_empty() {
+                    q_map.entry(args[0].clone()).or_default().push(args[1].clone());
+                    break;
+                }
+            }
+            set.query = Some(q_map);
+        }
         "remote_ip" => {
             set.remote_ip = Some(RemoteIpMatcher {
                 ranges: args.to_vec(),
             });
+        }
+        "client_ip" => {
+            set.client_ip = Some(RemoteIpMatcher {
+                ranges: args.to_vec(),
+            });
+        }
+        "protocol" => {
+            set.protocol = args.first().cloned();
+        }
+        "vars" => {
+            if args.len() >= 2 {
+                let mut vars = set.vars.clone().unwrap_or_default();
+                vars.insert(args[0].clone(), args[1..].join(" "));
+                set.vars = Some(vars);
+            }
+        }
+        "vars_regexp" => {
+            if args.len() == 2 {
+                let mut vars_re = set.vars_regexp.clone().unwrap_or_default();
+                vars_re.insert(args[0].clone(), args[1].clone());
+                set.vars_regexp = Some(vars_re);
+            } else if args.len() >= 3 {
+                let mut vars_re = set.vars_regexp.clone().unwrap_or_default();
+                vars_re.insert(args[1].clone(), args[2].clone());
+                set.vars_regexp = Some(vars_re);
+            }
+        }
+        "file" => {
+            let mut file_cfg = set.file.clone().unwrap_or_default();
+            if !args.is_empty() {
+                file_cfg.try_files = args.to_vec();
+            }
+            set.file = Some(file_cfg);
         }
         "expression" => {
             set.expression = Some(args.join(" "));
@@ -1684,12 +1874,54 @@ fn parse_named_matcher_block(dir: &DirectiveNode) -> ParseResult<MatcherSet> {
     let mut set = MatcherSet::default();
     if let Some(ref block) = dir.block {
         for sub in block {
-            populate_named_matcher_item(&mut set, sub.name.as_str(), &sub.args);
+            if sub.name == "not" {
+                let inner = if let Some(ref not_block) = sub.block {
+                    let mut inner_set = MatcherSet::default();
+                    for inner_sub in not_block {
+                        populate_named_matcher_item(&mut inner_set, inner_sub.name.as_str(), &inner_sub.args);
+                    }
+                    inner_set
+                } else if !sub.args.is_empty() {
+                    let mut inner_set = MatcherSet::default();
+                    populate_named_matcher_item(&mut inner_set, sub.args[0].as_str(), &sub.args[1..]);
+                    inner_set
+                } else {
+                    MatcherSet::default()
+                };
+                let mut existing_not = set.not.take().unwrap_or_default();
+                existing_not.push(inner);
+                set.not = Some(existing_not);
+            } else if sub.name == "file" && sub.block.is_some() {
+                let mut file_cfg = FileMatcherConfig::default();
+                if let Some(ref fblock) = sub.block {
+                    for fsub in fblock {
+                        match fsub.name.as_str() {
+                            "root" => file_cfg.root = fsub.args.first().cloned(),
+                            "try_files" => file_cfg.try_files = fsub.args.clone(),
+                            "split_path" => file_cfg.split_path = fsub.args.clone(),
+                            _ => {}
+                        }
+                    }
+                }
+                set.file = Some(file_cfg);
+            } else {
+                populate_named_matcher_item(&mut set, sub.name.as_str(), &sub.args);
+            }
         }
     } else if !dir.args.is_empty() {
         if dir.args[0].starts_with('/') {
             // Shorthand path matcher: @name /path1 /path2
             set.path = Some(dir.args.clone());
+        } else if dir.args[0] == "not" {
+            let mut inner_set = MatcherSet::default();
+            if dir.args.len() > 1 {
+                if dir.args[1].starts_with('/') {
+                    inner_set.path = Some(dir.args[1..].to_vec());
+                } else {
+                    populate_named_matcher_item(&mut inner_set, dir.args[1].as_str(), &dir.args[2..]);
+                }
+            }
+            set.not = Some(vec![inner_set]);
         } else {
             // Standard single-line matcher: @name matcher_type [args...]
             populate_named_matcher_item(&mut set, dir.args[0].as_str(), &dir.args[1..]);
@@ -1756,6 +1988,11 @@ fn merge_matcher_set(dst: &mut MatcherSet, src: &MatcherSet) {
         existing.extend(p.clone());
         dst.path = Some(existing);
     }
+    if let Some(ref pr) = src.path_regexp {
+        let mut existing = dst.path_regexp.take().unwrap_or_default();
+        existing.extend(pr.clone());
+        dst.path_regexp = Some(existing);
+    }
     if let Some(ref m) = src.method {
         dst.method = Some(m.clone());
     }
@@ -1764,8 +2001,42 @@ fn merge_matcher_set(dst: &mut MatcherSet, src: &MatcherSet) {
         existing.extend(hdr.clone());
         dst.header = Some(existing);
     }
+    if let Some(ref hdr_re) = src.header_regexp {
+        let mut existing = dst.header_regexp.take().unwrap_or_default();
+        existing.extend(hdr_re.clone());
+        dst.header_regexp = Some(existing);
+    }
+    if let Some(ref q) = src.query {
+        let mut existing = dst.query.take().unwrap_or_default();
+        existing.extend(q.clone());
+        dst.query = Some(existing);
+    }
     if let Some(ref ip) = src.remote_ip {
         dst.remote_ip = Some(ip.clone());
+    }
+    if let Some(ref ip) = src.client_ip {
+        dst.client_ip = Some(ip.clone());
+    }
+    if let Some(ref proto) = src.protocol {
+        dst.protocol = Some(proto.clone());
+    }
+    if let Some(ref v) = src.vars {
+        let mut existing = dst.vars.take().unwrap_or_default();
+        existing.extend(v.clone());
+        dst.vars = Some(existing);
+    }
+    if let Some(ref vr) = src.vars_regexp {
+        let mut existing = dst.vars_regexp.take().unwrap_or_default();
+        existing.extend(vr.clone());
+        dst.vars_regexp = Some(existing);
+    }
+    if let Some(ref f) = src.file {
+        dst.file = Some(f.clone());
+    }
+    if let Some(ref n) = src.not {
+        let mut existing = dst.not.take().unwrap_or_default();
+        existing.extend(n.clone());
+        dst.not = Some(existing);
     }
     if let Some(ref expr) = src.expression {
         dst.expression = Some(expr.clone());

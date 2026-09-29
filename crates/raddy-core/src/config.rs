@@ -127,6 +127,15 @@ pub struct HttpServer {
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub logs: Option<ServerLogConfig>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub errors: Option<HttpErrorsConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct HttpErrorsConfig {
+    #[serde(default)]
+    pub routes: Vec<Route>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
@@ -188,6 +197,18 @@ pub struct MatcherSet {
     pub remote_ip: Option<RemoteIpMatcher>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub client_ip: Option<RemoteIpMatcher>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vars: Option<HashMap<String, String>>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vars_regexp: Option<HashMap<String, String>>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file: Option<FileMatcherConfig>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub expression: Option<String>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -195,6 +216,18 @@ pub struct MatcherSet {
 
     #[serde(flatten)]
     pub extra: HashMap<String, serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct FileMatcherConfig {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub root: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub try_files: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub try_policy: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub split_path: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]

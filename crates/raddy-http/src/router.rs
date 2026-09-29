@@ -114,6 +114,7 @@ pub struct VirtualHostRouter {
     exact_hosts: HashMap<String, Router>,
     wildcard_hosts: Vec<(String, Router)>,
     default_router: Option<Router>,
+    error_router: Option<Router>,
 }
 
 impl VirtualHostRouter {
@@ -133,38 +134,59 @@ impl VirtualHostRouter {
         self.default_router = Some(router);
     }
 
+    pub fn set_error_router(&mut self, router: Router) {
+        self.error_router = Some(router);
+    }
+
     pub async fn route_request(&self, ctx: &mut Context) -> Result<()> {
         let host = ctx.get_placeholder("host").unwrap_or_default().to_lowercase();
 
         // 1. Exact host match
         if let Some(router) = self.exact_hosts.get(&host) {
             router.handle(ctx).await?;
-            if ctx.response_written {
-                return Ok(());
-            }
-        }
-
-        // 2. Wildcard host match (e.g. *.example.com)
-        for (suffix, router) in &self.wildcard_hosts {
-            if host.ends_with(suffix) {
-                router.handle(ctx).await?;
-                if ctx.response_written {
-                    return Ok(());
-                }
-            }
-        }
-
-        // 3. Fallback to default router
-        if let Some(ref router) = self.default_router {
+        } else if let Some((_, router)) = self.wildcard_hosts.iter().find(|(suffix, _)| host.ends_with(suffix)) {
+            // 2. Wildcard host match (e.g. *.example.com)
             router.handle(ctx).await?;
-            if ctx.response_written {
-                return Ok(());
+        } else if let Some(ref router) = self.default_router {
+            // 3. Fallback to default router
+            router.handle(ctx).await?;
+        }
+
+        let needs_error_handling = if !ctx.response_written {
+            let status = ctx.status.unwrap_or(StatusCode::NOT_FOUND);
+            ctx.status = Some(status);
+            ctx.set_var("err.status_code", status.as_u16().to_string());
+            ctx.set_var("err.status_text", status.canonical_reason().unwrap_or("").to_string());
+            if ctx.get_var("err.message").is_none() {
+                ctx.set_var("err.message", format!("HTTP error {}", status.as_u16()));
+            }
+            true
+        } else if let Some(status) = ctx.status {
+            if status.is_client_error() || status.is_server_error() {
+                ctx.set_var("err.status_code", status.as_u16().to_string());
+                ctx.set_var("err.status_text", status.canonical_reason().unwrap_or("").to_string());
+                if ctx.get_var("err.message").is_none() {
+                    ctx.set_var("err.message", format!("HTTP error {}", status.as_u16()));
+                }
+                true
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+
+        if needs_error_handling {
+            if let Some(ref err_router) = self.error_router {
+                ctx.response_written = false;
+                err_router.handle(ctx).await?;
             }
         }
 
-        // 4. Default 404 if no handler responded
+        // Default 404 if no handler responded
         if !ctx.response_written {
-            ctx.set_response(StatusCode::NOT_FOUND, "404 Not Found\n");
+            let st = ctx.status.unwrap_or(StatusCode::NOT_FOUND);
+            ctx.set_response(st, format!("{} {}\n", st.as_u16(), st.canonical_reason().unwrap_or("Not Found")));
         }
 
         Ok(())
@@ -220,6 +242,14 @@ pub fn compile_virtual_host_router(
 
     if !default_routes.is_empty() {
         vhost_router.set_default(Router::new(default_routes));
+    }
+
+    if let Some(ref errors_cfg) = server.errors {
+        let mut error_routes = Vec::new();
+        for r in &errors_cfg.routes {
+            error_routes.push(compile_route(r, registry)?);
+        }
+        vhost_router.set_error_router(Router::new(error_routes));
     }
 
     Ok(vhost_router)
@@ -291,6 +321,21 @@ fn compile_handler(h_cfg: &HandlerConfig, registry: &ModuleRegistry) -> Result<A
             }
         }
 
+        "method" => {
+            let method = h_cfg.details.get("method").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            Ok(Arc::new(raddy_core::handler::MethodHandler { method }))
+        }
+
+        "try_files" => {
+            let try_files = h_cfg
+                .details
+                .get("try_files")
+                .and_then(|v| v.as_array())
+                .map(|arr| arr.iter().filter_map(|x| x.as_str().map(|s| s.to_string())).collect())
+                .unwrap_or_default();
+            Ok(Arc::new(raddy_core::handler::TryFilesHandler { try_files }))
+        }
+
         "rewrite" => {
             let uri_template = h_cfg
                 .details
@@ -307,11 +352,23 @@ fn compile_handler(h_cfg: &HandlerConfig, registry: &ModuleRegistry) -> Result<A
                 .get("strip_path_suffix")
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string());
+            let search = h_cfg
+                .details
+                .get("search")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            let replace = h_cfg
+                .details
+                .get("replace")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
 
             Ok(Arc::new(RewriteHandler {
                 uri_template,
                 strip_path_prefix,
                 strip_path_suffix,
+                search,
+                replace,
             }))
         }
 
@@ -321,6 +378,15 @@ fn compile_handler(h_cfg: &HandlerConfig, registry: &ModuleRegistry) -> Result<A
                 for (k, v) in map {
                     if let Some(s) = v.as_str() {
                         set_response_headers.insert(k.clone(), s.to_string());
+                    }
+                }
+            }
+
+            let mut default_response_headers = HashMap::new();
+            if let Some(map) = h_cfg.details.get("default_response_headers").and_then(|v| v.as_object()) {
+                for (k, v) in map {
+                    if let Some(s) = v.as_str() {
+                        default_response_headers.insert(k.clone(), s.to_string());
                     }
                 }
             }
@@ -354,6 +420,7 @@ fn compile_handler(h_cfg: &HandlerConfig, registry: &ModuleRegistry) -> Result<A
 
             Ok(Arc::new(HeadersHandler {
                 set_response_headers,
+                default_response_headers,
                 delete_response_headers,
                 set_request_headers,
                 delete_request_headers,
