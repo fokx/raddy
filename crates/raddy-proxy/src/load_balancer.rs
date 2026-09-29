@@ -26,13 +26,20 @@ impl RoundRobin {
 
 impl LoadBalancer for RoundRobin {
     fn select<'a>(&self, upstreams: &'a [Arc<Upstream>], _ctx: &Context) -> Option<&'a Arc<Upstream>> {
-        let available: Vec<&'a Arc<Upstream>> = upstreams.iter().filter(|u| u.is_available()).collect();
-        if available.is_empty() {
+        let n = upstreams.len();
+        if n == 0 {
             return None;
         }
 
-        let next = self.index.fetch_add(1, Ordering::Relaxed);
-        Some(available[next % available.len()])
+        for _ in 0..n {
+            let next = self.index.fetch_add(1, Ordering::Relaxed) + 1;
+            let host = &upstreams[next % n];
+            if host.is_available() {
+                return Some(host);
+            }
+        }
+
+        None
     }
 }
 
@@ -111,6 +118,65 @@ pub struct First;
 impl LoadBalancer for First {
     fn select<'a>(&self, upstreams: &'a [Arc<Upstream>], _ctx: &Context) -> Option<&'a Arc<Upstream>> {
         upstreams.iter().find(|u| u.is_available())
+    }
+}
+
+/// Weighted Round Robin load balancer matching Caddy's WeightedRoundRobinSelection.
+pub struct WeightedRoundRobin {
+    pub weights: Vec<usize>,
+    index: AtomicUsize,
+    total_weight: usize,
+}
+
+impl WeightedRoundRobin {
+    pub fn new(weights: Vec<usize>) -> Self {
+        let total_weight = weights.iter().sum();
+        Self {
+            weights,
+            index: AtomicUsize::new(0),
+            total_weight,
+        }
+    }
+}
+
+impl LoadBalancer for WeightedRoundRobin {
+    fn select<'a>(&self, upstreams: &'a [Arc<Upstream>], _ctx: &Context) -> Option<&'a Arc<Upstream>> {
+        if upstreams.is_empty() || self.total_weight == 0 {
+            return None;
+        }
+
+        let available_with_weights: Vec<(&'a Arc<Upstream>, usize)> = upstreams
+            .iter()
+            .enumerate()
+            .filter_map(|(i, u)| {
+                let weight = self.weights.get(i).copied().unwrap_or(1);
+                if u.is_available() && weight > 0 {
+                    Some((u, weight))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        if available_with_weights.is_empty() {
+            return None;
+        }
+
+        let total_avail_weight: usize = available_with_weights.iter().map(|(_, w)| *w).sum();
+        if total_avail_weight == 0 {
+            return None;
+        }
+
+        let cur = self.index.fetch_add(1, Ordering::Relaxed) % total_avail_weight;
+        let mut accum = 0;
+        for (u, w) in &available_with_weights {
+            accum += *w;
+            if cur < accum {
+                return Some(u);
+            }
+        }
+
+        available_with_weights.first().map(|(u, _)| *u)
     }
 }
 

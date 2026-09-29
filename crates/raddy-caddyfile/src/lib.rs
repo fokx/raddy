@@ -3,7 +3,9 @@
 //! and adaptation of Caddyfile configurations to Raddy's internal JSON config.
 
 pub mod adapter;
+pub mod address;
 pub mod ast;
+pub mod caddyfile;
 pub mod dispenser;
 pub mod error;
 pub mod formatter;
@@ -12,6 +14,7 @@ pub mod parser;
 pub mod preprocessor;
 
 pub use adapter::Adapter;
+pub use address::{parse_address, Address};
 pub use ast::Caddyfile;
 pub use dispenser::Dispenser;
 pub use error::{ParseError, ParseResult};

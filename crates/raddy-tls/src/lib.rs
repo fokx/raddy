@@ -7,6 +7,7 @@ pub mod acme;
 pub mod error;
 pub mod local_ca;
 pub mod manager;
+pub mod matchers;
 pub mod sni;
 pub mod storage;
 
@@ -14,6 +15,7 @@ pub use acme::{AcmeClient, Http01ChallengeStore, LETS_ENCRYPT_PRODUCTION, LETS_E
 pub use error::{Result, TlsError};
 pub use local_ca::LocalCa;
 pub use manager::{is_local_or_private, TlsManager};
+pub use matchers::{RemoteIpMatcher, ServerNameMatcher, ServerNameREMatcher};
 pub use sni::SniResolver;
 pub use storage::{parse_certified_key, CertStorage, FileCertStorage};
 

@@ -17,9 +17,12 @@ pub use forward::{
     AclDecision, AclRule, AclRuleConfig, AuthConfig, AuthError, ForwardProxyConfig,
     ForwardProxyHandler, ProbeResistanceConfig, UpstreamProxy,
 };
-pub use headers::HeaderMutator;
+pub use headers::{strip_hop_by_hop_headers, HeaderMutator};
 pub use health::{ActiveHealthConfig, PassiveHealthConfig};
-pub use load_balancer::{parse_load_balancer, LoadBalancer, RoundRobin, LeastConn, IpHash, UriHash, Random, First};
+pub use load_balancer::{
+    parse_load_balancer, First, IpHash, LeastConn, LoadBalancer, Random, RoundRobin, UriHash,
+    WeightedRoundRobin,
+};
 pub use proxy::ReverseProxyHandler;
 pub use transport::HttpTransport;
 pub use upstream::Upstream;

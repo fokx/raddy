@@ -723,6 +723,11 @@ pub enum FilterAction {
         replace: HashMap<String, String>,
         hash: Vec<String>,
     },
+    SetCookie {
+        delete: Vec<String>,
+        replace: HashMap<String, String>,
+        hash: Vec<String>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -992,13 +997,35 @@ fn parse_filter_rule(val: &serde_json::Value) -> Option<FilterRule> {
             }
             FilterAction::Cookie { delete, replace, hash }
         }
+        "set_cookie" => {
+            let mut delete = Vec::new();
+            let mut replace = HashMap::new();
+            let mut hash = Vec::new();
+
+            if let Some(actions) = val.get("actions").and_then(|v| v.as_array()) {
+                for a in actions {
+                    let act_type = a.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                    let name = a.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    match act_type {
+                        "delete" => delete.push(name),
+                        "replace" => {
+                            let val_str = a.get("value").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                            replace.insert(name, val_str);
+                        }
+                        "hash" => hash.push(name),
+                        _ => {}
+                    }
+                }
+            }
+            FilterAction::SetCookie { delete, replace, hash }
+        }
         _ => return None,
     };
 
     Some(FilterRule { field_path, action })
 }
 
-fn apply_filter(target: &mut serde_json::Value, path: &[String], action: &FilterAction) {
+pub fn apply_filter(target: &mut serde_json::Value, path: &[String], action: &FilterAction) {
     if path.is_empty() {
         return;
     }
@@ -1060,6 +1087,13 @@ fn apply_filter(target: &mut serde_json::Value, path: &[String], action: &Filter
                     }
                 }
             }
+            FilterAction::SetCookie { delete, replace, hash } => {
+                if let serde_json::Value::Object(map) = target {
+                    if let Some(val) = map.get_mut(key) {
+                        transform_value_set_cookie(val, delete, replace, hash);
+                    }
+                }
+            }
         }
     } else {
         let head = &path[0];
@@ -1072,7 +1106,7 @@ fn apply_filter(target: &mut serde_json::Value, path: &[String], action: &Filter
     }
 }
 
-fn sha256_short_hex(input: &str) -> String {
+pub fn sha256_short_hex(input: &str) -> String {
     let d = digest(&SHA256, input.as_bytes());
     // first 4 bytes = 8 hex chars
     hex::encode(&d.as_ref()[..4])
@@ -1089,7 +1123,7 @@ mod hex {
     }
 }
 
-fn transform_value_hash(val: &mut serde_json::Value) {
+pub fn transform_value_hash(val: &mut serde_json::Value) {
     match val {
         serde_json::Value::String(s) => {
             *s = sha256_short_hex(s);
@@ -1105,7 +1139,7 @@ fn transform_value_hash(val: &mut serde_json::Value) {
     }
 }
 
-fn transform_value_regexp(val: &mut serde_json::Value, re: &Regex, rep: &str) {
+pub fn transform_value_regexp(val: &mut serde_json::Value, re: &Regex, rep: &str) {
     match val {
         serde_json::Value::String(s) => {
             *s = re.replace_all(s, rep).to_string();
@@ -1121,7 +1155,7 @@ fn transform_value_regexp(val: &mut serde_json::Value, re: &Regex, rep: &str) {
     }
 }
 
-fn transform_value_ipmask(val: &mut serde_json::Value, ipv4_cidr: u8, ipv6_cidr: u8) {
+pub fn transform_value_ipmask(val: &mut serde_json::Value, ipv4_cidr: u8, ipv6_cidr: u8) {
     match val {
         serde_json::Value::String(s) => {
             *s = mask_ip_string(s, ipv4_cidr, ipv6_cidr);
@@ -1137,11 +1171,33 @@ fn transform_value_ipmask(val: &mut serde_json::Value, ipv4_cidr: u8, ipv6_cidr:
     }
 }
 
-fn mask_ip_string(s: &str, ipv4_cidr: u8, ipv6_cidr: u8) -> String {
+pub fn mask_ip_string(s: &str, ipv4_cidr: u8, ipv6_cidr: u8) -> String {
     let mut parts = Vec::new();
     for part in s.split(',') {
         let trimmed = part.trim();
-        if let Ok(ip) = trimmed.parse::<IpAddr>() {
+        let (ip_str, port_str) = if trimmed.starts_with('[') {
+            if let Some(close_bracket) = trimmed.find(']') {
+                let inside = &trimmed[1..close_bracket];
+                let rest = &trimmed[close_bracket + 1..];
+                if let Some(port) = rest.strip_prefix(':') {
+                    (inside, Some(port))
+                } else {
+                    (inside, None)
+                }
+            } else {
+                (trimmed, None)
+            }
+        } else if let Some((h, p)) = trimmed.split_once(':') {
+            if !p.contains(':') && !h.is_empty() && !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()) {
+                (h, Some(p))
+            } else {
+                (trimmed, None)
+            }
+        } else {
+            (trimmed, None)
+        };
+
+        if let Ok(ip) = ip_str.parse::<IpAddr>() {
             match ip {
                 IpAddr::V4(v4) => {
                     let bits = u32::from(v4);
@@ -1153,7 +1209,11 @@ fn mask_ip_string(s: &str, ipv4_cidr: u8, ipv6_cidr: u8) -> String {
                         !((1u32 << (32 - ipv4_cidr)) - 1)
                     };
                     let masked = std::net::Ipv4Addr::from(bits & mask);
-                    parts.push(masked.to_string());
+                    if let Some(port) = port_str {
+                        parts.push(format!("{}:{}", masked, port));
+                    } else {
+                        parts.push(masked.to_string());
+                    }
                 }
                 IpAddr::V6(v6) => {
                     let bits = u128::from(v6);
@@ -1165,7 +1225,11 @@ fn mask_ip_string(s: &str, ipv4_cidr: u8, ipv6_cidr: u8) -> String {
                         !((1u128 << (128 - ipv6_cidr)) - 1)
                     };
                     let masked = std::net::Ipv6Addr::from(bits & mask);
-                    parts.push(masked.to_string());
+                    if let Some(port) = port_str {
+                        parts.push(format!("[{}]:{}", masked, port));
+                    } else {
+                        parts.push(masked.to_string());
+                    }
                 }
             }
         } else {
@@ -1175,16 +1239,36 @@ fn mask_ip_string(s: &str, ipv4_cidr: u8, ipv6_cidr: u8) -> String {
     parts.join(", ")
 }
 
-fn transform_value_query(
+pub fn transform_value_query(
     val: &mut serde_json::Value,
     delete: &[String],
     replace: &HashMap<String, String>,
     hash: &[String],
 ) {
-    let serde_json::Value::String(uri_str) = val else { return };
-    let Some((path, query)) = uri_str.split_once('?') else { return };
+    match val {
+        serde_json::Value::String(s) => {
+            *s = process_query_string(s, delete, replace, hash);
+        }
+        serde_json::Value::Array(arr) => {
+            for item in arr {
+                if let serde_json::Value::String(s) = item {
+                    *s = process_query_string(s, delete, replace, hash);
+                }
+            }
+        }
+        _ => {}
+    }
+}
 
-    let mut new_pairs = Vec::new();
+pub fn process_query_string(
+    s: &str,
+    delete: &[String],
+    replace: &HashMap<String, String>,
+    hash: &[String],
+) -> String {
+    let Some((path, query)) = s.split_once('?') else { return s.to_string() };
+
+    let mut map: std::collections::BTreeMap<String, Vec<String>> = std::collections::BTreeMap::new();
     for pair in query.split('&') {
         if pair.is_empty() {
             continue;
@@ -1193,23 +1277,31 @@ fn transform_value_query(
         if delete.iter().any(|d| d == k) {
             continue;
         }
-        if let Some(replacement) = replace.get(k) {
-            new_pairs.push(format!("{}={}", k, replacement));
+        let val_transformed = if let Some(replacement) = replace.get(k) {
+            replacement.clone()
         } else if hash.iter().any(|h| h == k) {
-            new_pairs.push(format!("{}={}", k, sha256_short_hex(v)));
+            sha256_short_hex(v)
         } else {
-            new_pairs.push(pair.to_string());
+            v.to_string()
+        };
+        map.entry(k.to_string()).or_default().push(val_transformed);
+    }
+
+    let mut new_pairs = Vec::new();
+    for (k, vals) in map {
+        for v in vals {
+            new_pairs.push(format!("{}={}", k, v));
         }
     }
 
     if new_pairs.is_empty() {
-        *uri_str = path.to_string();
+        path.to_string()
     } else {
-        *uri_str = format!("{}?{}", path, new_pairs.join("&"));
+        format!("{}?{}", path, new_pairs.join("&"))
     }
 }
 
-fn transform_value_cookie(
+pub fn transform_value_cookie(
     val: &mut serde_json::Value,
     delete: &[String],
     replace: &HashMap<String, String>,
@@ -1228,6 +1320,92 @@ fn transform_value_cookie(
         }
         _ => {}
     }
+}
+
+pub fn transform_value_set_cookie(
+    val: &mut serde_json::Value,
+    delete: &[String],
+    replace: &HashMap<String, String>,
+    hash: &[String],
+) {
+    match val {
+        serde_json::Value::String(s) => {
+            if let Some(filtered) = filter_set_cookie_line(s, delete, replace, hash) {
+                *s = filtered;
+            } else {
+                *val = serde_json::Value::Null;
+            }
+        }
+        serde_json::Value::Array(arr) => {
+            let mut new_arr = Vec::new();
+            for item in arr.iter() {
+                if let serde_json::Value::String(s) = item {
+                    if let Some(filtered) = filter_set_cookie_line(s, delete, replace, hash) {
+                        new_arr.push(serde_json::Value::String(filtered));
+                    }
+                }
+            }
+            *arr = new_arr;
+        }
+        _ => {}
+    }
+}
+
+pub fn filter_set_cookie_line(
+    line: &str,
+    delete: &[String],
+    replace: &HashMap<String, String>,
+    hash: &[String],
+) -> Option<String> {
+    let head_end = line.find(';').unwrap_or(line.len());
+    let head = &line[..head_end];
+    let eq = match head.find('=') {
+        Some(pos) => pos,
+        None => return Some(line.to_string()),
+    };
+
+    let name = head[..eq].trim();
+    if name.is_empty() {
+        return Some(line.to_string());
+    }
+
+    let raw_val = &head[eq + 1..];
+    let trimmed_val = raw_val.trim();
+    let is_quoted = trimmed_val.len() >= 2 && trimmed_val.starts_with('"') && trimmed_val.ends_with('"');
+    let inner_val = if is_quoted {
+        &trimmed_val[1..trimmed_val.len() - 1]
+    } else {
+        trimmed_val
+    };
+
+    if delete.iter().any(|d| d == name) {
+        return None;
+    }
+
+    let new_val = if let Some(rep) = replace.get(name) {
+        rep.clone()
+    } else if hash.iter().any(|h| h == name) {
+        sha256_short_hex(inner_val)
+    } else {
+        return Some(line.to_string());
+    };
+
+    let replacement = if is_quoted {
+        format!("\"{}\"", new_val)
+    } else {
+        new_val
+    };
+
+    let leading_ws_len = raw_val.len() - raw_val.trim_start().len();
+    let trailing_ws_len = raw_val.len() - raw_val.trim_end().len();
+
+    let mut res = String::new();
+    res.push_str(&line[..=eq]);
+    res.push_str(&raw_val[..leading_ws_len]);
+    res.push_str(&replacement);
+    res.push_str(&raw_val[raw_val.len() - trailing_ws_len..]);
+    res.push_str(&line[head_end..]);
+    Some(res)
 }
 
 fn transform_cookie_header_str(

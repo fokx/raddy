@@ -10,5 +10,6 @@ pub mod state;
 
 pub use api::build_admin_router;
 pub use error::{AdminError, Result};
+pub use path_ops::{check_host, origin_allowed, unsynced_config_access};
 pub use server::AdminServer;
 pub use state::AppState;

@@ -102,3 +102,43 @@ impl HeaderMutator {
         }
     }
 }
+
+/// Strips hop-by-hop headers from an upstream response, preserving Upgrade on 101.
+pub fn strip_hop_by_hop_headers(headers: &mut HeaderMap, is_101: bool) {
+    let mut to_remove = Vec::new();
+    if let Some(conn_val) = headers.get(http::header::CONNECTION).and_then(|v| v.to_str().ok()) {
+        for part in conn_val.split(',') {
+            let trimmed = part.trim();
+            if !trimmed.is_empty() && !trimmed.eq_ignore_ascii_case("upgrade") {
+                to_remove.push(trimmed.to_lowercase());
+            }
+        }
+    }
+
+    for name in to_remove {
+        if let Ok(h) = HeaderName::try_from(name.as_str()) {
+            headers.remove(&h);
+        }
+    }
+
+    let hop_headers = [
+        "alt-svc",
+        "keep-alive",
+        "proxy-authenticate",
+        "proxy-authorization",
+        "te",
+        "trailer",
+        "transfer-encoding",
+    ];
+
+    for &h in &hop_headers {
+        headers.remove(HeaderName::from_static(h));
+    }
+
+    if !is_101 {
+        headers.remove(http::header::CONNECTION);
+        headers.remove(http::header::UPGRADE);
+    } else {
+        headers.insert(http::header::CONNECTION, HeaderValue::from_static("Upgrade"));
+    }
+}

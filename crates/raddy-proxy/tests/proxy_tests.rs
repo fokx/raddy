@@ -23,10 +23,10 @@ fn test_load_balancer_round_robin() {
     let s3 = lb.select(&upstreams, &ctx).unwrap();
     let s4 = lb.select(&upstreams, &ctx).unwrap();
 
-    assert_eq!(s1.dial, "127.0.0.1:8001");
-    assert_eq!(s2.dial, "127.0.0.1:8002");
-    assert_eq!(s3.dial, "127.0.0.1:8003");
-    assert_eq!(s4.dial, "127.0.0.1:8001");
+    assert_eq!(s1.dial, "127.0.0.1:8002");
+    assert_eq!(s2.dial, "127.0.0.1:8003");
+    assert_eq!(s3.dial, "127.0.0.1:8001");
+    assert_eq!(s4.dial, "127.0.0.1:8002");
 }
 
 #[test]
@@ -218,7 +218,6 @@ async fn test_reverse_proxy_forwards_host_from_uri_authority_when_host_header_mi
     use hyper_util::rt::{TokioExecutor, TokioIo};
     use hyper_util::server::conn::auto::Builder;
     use tokio::net::TcpListener;
-    use std::sync::atomic::{AtomicBool, Ordering};
 
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let backend_addr = listener.local_addr().unwrap();
