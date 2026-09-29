@@ -3,13 +3,18 @@ name = "raddy-admin"
 version = "0.1.0"
 edition = "2024"
 license = "Apache-2.0"
+description = "Axum REST Admin API and zero-downtime hot reload engine for Raddy"
+repository = "https://github.com/fokx/raddy"
+readme = "README.md"
+keywords = ["caddy", "admin-api", "hot-reload", "axum", "raddy"]
+categories = ["web-programming::http-server"]
 
 [dependencies]
-raddy-core = { path = "../raddy-core" }
-raddy-caddyfile = { path = "../raddy-caddyfile" }
-raddy-http = { path = "../raddy-http" }
-raddy-tls = { path = "../raddy-tls" }
-raddy-proxy = { path = "../raddy-proxy" }
+raddy-core = { version = "0.1.0", path = "../raddy-core" }
+raddy-caddyfile = { version = "0.1.0", path = "../raddy-caddyfile" }
+raddy-http = { version = "0.1.0", path = "../raddy-http" }
+raddy-tls = { version = "0.1.0", path = "../raddy-tls" }
+raddy-proxy = { version = "0.1.0", path = "../raddy-proxy" }
 axum = "0.8"
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }

@@ -3,6 +3,12 @@ name = "raddy-server"
 version = "0.1.0"
 edition = "2024"
 license = "Apache-2.0"
+description = "Fast, extensible, memory-safe web server and reverse proxy in Rust (Caddy drop-in replacement)"
+repository = "https://github.com/fokx/raddy"
+homepage = "https://github.com/fokx/raddy"
+readme = "README.md"
+keywords = ["caddy", "web-server", "reverse-proxy", "http3", "acme"]
+categories = ["web-programming::http-server", "network-programming"]
 
 [[bin]]
 name = "raddy"
@@ -19,12 +25,12 @@ members = [
 ]
 
 [dependencies]
-raddy-core = { path = "crates/raddy-core" }
-raddy-caddyfile = { path = "crates/raddy-caddyfile" }
-raddy-http = { path = "crates/raddy-http" }
-raddy-tls = { path = "crates/raddy-tls" }
-raddy-proxy = { path = "crates/raddy-proxy" }
-raddy-admin = { path = "crates/raddy-admin" }
+raddy-core = { version = "0.1.0", path = "crates/raddy-core" }
+raddy-caddyfile = { version = "0.1.0", path = "crates/raddy-caddyfile" }
+raddy-http = { version = "0.1.0", path = "crates/raddy-http" }
+raddy-tls = { version = "0.1.0", path = "crates/raddy-tls" }
+raddy-proxy = { version = "0.1.0", path = "crates/raddy-proxy" }
+raddy-admin = { version = "0.1.0", path = "crates/raddy-admin" }
 
 tokio = { version = "1", features = ["full"] }
 clap = { version = "4", features = ["derive"] }

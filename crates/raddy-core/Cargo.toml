@@ -3,6 +3,11 @@ name = "raddy-core"
 version = "0.1.0"
 edition = "2024"
 license = "Apache-2.0"
+description = "Core runtime, configuration schemas, matchers, and handler interfaces for Raddy"
+repository = "https://github.com/fokx/raddy"
+readme = "README.md"
+keywords = ["caddy", "web-server", "middleware", "routing", "raddy"]
+categories = ["web-programming::http-server"]
 
 [dependencies]
 tokio = { version = "1", features = ["full"] }
