@@ -14,7 +14,7 @@ fn test_cli_version() {
 
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("raddy v0.1.0"));
+    assert!(stdout.contains(&format!("raddy v{}", env!("CARGO_PKG_VERSION"))));
 }
 
 #[test]
@@ -26,7 +26,7 @@ fn test_cli_environ() {
 
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("Raddy Version: v0.1.0"));
+    assert!(stdout.contains(&format!("Raddy Version: v{}", env!("CARGO_PKG_VERSION"))));
     assert!(stdout.contains("OS:"));
     assert!(stdout.contains("Architecture:"));
     assert!(stdout.contains("Environment Variables:"));

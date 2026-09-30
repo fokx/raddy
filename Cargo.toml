@@ -10,6 +10,10 @@ readme = "README.md"
 keywords = ["caddy", "web-server", "reverse-proxy", "http3", "acme"]
 categories = ["web-programming::http-server", "network-programming"]
 
+[lib]
+name = "raddy_server"
+path = "src/lib.rs"
+
 [[bin]]
 name = "raddy"
 path = "src/main.rs"
@@ -22,6 +26,7 @@ members = [
     "crates/raddy-tls",
     "crates/raddy-proxy",
     "crates/raddy-admin",
+    "crates/raddyserver",
 ]
 
 [dependencies]
