@@ -38,6 +38,18 @@ enum Commands {
         /// Print the runtime environment variables on startup
         #[arg(short, long)]
         environ: bool,
+
+        /// ACME directory URL or provider alias (e.g. staging, zerossl)
+        #[arg(long = "ca")]
+        ca: Option<String>,
+
+        /// Use ACME staging/development CA for testing certificates without rate limits
+        #[arg(long = "acme-staging", alias = "staging", alias = "dev")]
+        staging: bool,
+
+        /// Enable verbose debug logging for TLS, ACME, and HTTP
+        #[arg(long = "debug", short = 'd')]
+        debug: bool,
     },
 
     /// Starts Raddy in the background (daemon mode)
@@ -57,6 +69,18 @@ enum Commands {
         /// Automatically reload configuration when file changes on disk
         #[arg(short, long)]
         watch: bool,
+
+        /// ACME directory URL or provider alias (e.g. staging, zerossl)
+        #[arg(long = "ca")]
+        ca: Option<String>,
+
+        /// Use ACME staging/development CA for testing certificates without rate limits
+        #[arg(long = "acme-staging", alias = "staging", alias = "dev")]
+        staging: bool,
+
+        /// Enable verbose debug logging for TLS, ACME, and HTTP
+        #[arg(long = "debug", short = 'd')]
+        debug: bool,
     },
 
     /// Stops a running Raddy instance via Admin API
@@ -230,8 +254,18 @@ enum Commands {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    let is_debug = std::env::args().any(|arg| arg == "--debug" || arg == "-d")
+        || std::env::var("RADDY_DEBUG").map(|v| v == "1" || v == "true").unwrap_or(false)
+        || std::env::var("DEBUG").map(|v| v == "1" || v == "true").unwrap_or(false);
+
+    let default_filter = if is_debug {
+        "debug,raddy=debug,raddy_tls=debug,raddy_http=debug,raddy_admin=debug,raddy_caddyfile=debug"
+    } else {
+        "info"
+    };
+
     tracing_subscriber::registry()
-        .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
+        .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| default_filter.into()))
         .with(tracing_subscriber::fmt::layer())
         .init();
 
@@ -244,6 +278,9 @@ async fn main() -> anyhow::Result<()> {
             pidfile,
             watch,
             environ,
+            ca,
+            staging,
+            debug,
         } => {
             commands::run::run_command(
                 &config,
@@ -251,6 +288,9 @@ async fn main() -> anyhow::Result<()> {
                 pidfile.as_deref(),
                 watch,
                 environ,
+                ca,
+                staging,
+                debug,
             )
             .await?;
         }
@@ -260,12 +300,18 @@ async fn main() -> anyhow::Result<()> {
             adapter,
             pidfile,
             watch,
+            ca,
+            staging,
+            debug,
         } => {
             commands::daemon::start_command(
                 &config,
                 adapter.as_deref(),
                 pidfile.as_deref(),
                 watch,
+                ca,
+                staging,
+                debug,
             )
             .await?;
         }

@@ -234,7 +234,17 @@ impl Adapter {
                     self.email = opt.args.first().cloned();
                 }
                 "acme_ca" => {
-                    self.acme_ca = opt.args.first().cloned();
+                    if let Some(arg) = opt.args.first() {
+                        let resolved = raddy_core::config::resolve_acme_ca(arg);
+                        if resolved.contains("staging") {
+                            self.staging = Some(true);
+                        }
+                        self.acme_ca = Some(resolved);
+                    }
+                }
+                "acme_staging" | "acme_dev" => {
+                    self.acme_ca = Some(raddy_core::config::LETS_ENCRYPT_STAGING.to_string());
+                    self.staging = Some(true);
                 }
                 "local_certs" => {
                     self.staging = Some(false);
@@ -348,7 +358,26 @@ impl Adapter {
                 let matcher_set = parse_named_matcher_block(dir)?;
                 named_matchers.insert(name, matcher_set);
             } else if dir.name == "tls" {
-                site_tls_policy = Some(parse_tls_directive(dir)?);
+                let pol = parse_tls_directive(dir)?;
+                if let Some(ref cs) = pol.certificate_selection {
+                    if let Some(ref tags) = cs.any_tag {
+                        for t in tags {
+                            if let Some(ca) = t.strip_prefix("ca:") {
+                                if self.acme_ca.is_none() {
+                                    self.acme_ca = Some(ca.to_string());
+                                }
+                                if ca.contains("staging") {
+                                    self.staging = Some(true);
+                                }
+                            } else if let Some(em) = t.strip_prefix("email:") {
+                                if self.email.is_none() {
+                                    self.email = Some(em.to_string());
+                                }
+                            }
+                        }
+                    }
+                }
+                site_tls_policy = Some(pol);
             } else if dir.name == "log" {
                 site_log_dirs.push(dir.clone());
             } else if dir.name == "bind" {
@@ -1941,6 +1970,18 @@ fn parse_tls_directive(dir: &DirectiveNode) -> ParseResult<TlsConnectionPolicy> 
                 all_tags: None,
                 serial_number: None,
             });
+        } else if first == "staging" || first == "dev" {
+            policy.certificate_selection = Some(CertificateSelection {
+                any_tag: Some(vec![format!("ca:{}", raddy_core::config::LETS_ENCRYPT_STAGING)]),
+                all_tags: None,
+                serial_number: None,
+            });
+        } else if first.contains('@') {
+            policy.certificate_selection = Some(CertificateSelection {
+                any_tag: Some(vec![format!("email:{}", first)]),
+                all_tags: None,
+                serial_number: None,
+            });
         } else if dir.args.len() >= 2 {
             let cert_file = first.clone();
             let key_file = dir.args[1].clone();
@@ -1955,6 +1996,14 @@ fn parse_tls_directive(dir: &DirectiveNode) -> ParseResult<TlsConnectionPolicy> 
     if let Some(ref block) = dir.block {
         for sub in block {
             match sub.name.as_str() {
+                "ca" => {
+                    if let Some(ca_arg) = sub.args.first() {
+                        let resolved = raddy_core::config::resolve_acme_ca(ca_arg);
+                        let tags = policy.certificate_selection.get_or_insert_with(CertificateSelection::default);
+                        let any_tag = tags.any_tag.get_or_insert_with(Vec::new);
+                        any_tag.push(format!("ca:{}", resolved));
+                    }
+                }
                 "protocols" => {
                     if let Some(pmin) = sub.args.first() {
                         policy.protocol_min = Some(pmin.clone());

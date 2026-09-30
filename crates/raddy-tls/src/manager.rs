@@ -24,7 +24,13 @@ impl TlsManager {
         let storage = Arc::new(FileCertStorage::new(FileCertStorage::default_dir()));
         let challenge_store = Http01ChallengeStore::new();
         let sni_resolver = Arc::new(SniResolver::new());
-        let acme = Arc::new(AcmeClient::new(acme_url.into(), email, challenge_store, sni_resolver.clone()));
+        let acme = Arc::new(AcmeClient::new(
+            acme_url.into(),
+            email,
+            challenge_store,
+            sni_resolver.clone(),
+            storage.clone(),
+        ));
 
         Ok(Self {
             local_ca,
@@ -44,8 +50,23 @@ impl TlsManager {
     }
 
     pub fn with_storage(mut self, storage: Arc<dyn CertStorage>) -> Self {
-        self.storage = storage;
+        self.storage = storage.clone();
+        self.acme = Arc::new(AcmeClient::new(
+            self.acme.directory_url().to_string(),
+            self.acme.email().map(|s| s.to_string()),
+            self.acme.challenge_store().clone(),
+            self.sni_resolver.clone(),
+            storage,
+        ));
         self
+    }
+
+    pub fn directory_url(&self) -> &str {
+        self.acme.directory_url()
+    }
+
+    pub fn is_staging(&self) -> bool {
+        self.acme.directory_url().contains("staging")
     }
 
     pub fn storage(&self) -> Arc<dyn CertStorage> {
@@ -82,7 +103,7 @@ impl TlsManager {
 
             // Generate via Local CA
             let (cert_pem, key_pem) = self.local_ca.issue_certificate(&[identifier.to_string()])?;
-            self.storage.store(identifier, &cert_pem, &key_pem).await?;
+            self.storage.store_with_ca(identifier, &cert_pem, &key_pem, None).await?;
 
             let certified_key = parse_certified_key(&cert_pem, &key_pem)?;
             self.sni_resolver.insert(identifier, certified_key.clone());
@@ -102,9 +123,9 @@ impl TlsManager {
             }
 
             // Public domain or public IP certificate via ACME (instant-acme)
-            tracing::info!("Requesting ACME certificate for '{}'...", identifier);
+            tracing::info!("Requesting ACME certificate for '{}' from CA '{}'...", identifier, self.acme.directory_url());
             let (cert_pem, key_pem) = self.acme.issue_certificate(&[identifier.to_string()]).await?;
-            self.storage.store(identifier, &cert_pem, &key_pem).await?;
+            self.storage.store_with_ca(identifier, &cert_pem, &key_pem, Some(self.acme.directory_url())).await?;
 
             let certified_key = parse_certified_key(&cert_pem, &key_pem)?;
             self.sni_resolver.insert(identifier, certified_key.clone());

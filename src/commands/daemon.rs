@@ -7,6 +7,9 @@ pub async fn start_command(
     adapter: Option<&str>,
     pidfile: Option<&Path>,
     watch: bool,
+    ca: Option<String>,
+    staging: bool,
+    debug: bool,
 ) -> Result<()> {
     let current_exe = std::env::current_exe().context("Failed to determine current executable path")?;
     let mut cmd = std::process::Command::new(current_exe);
@@ -20,6 +23,15 @@ pub async fn start_command(
     }
     if watch {
         cmd.arg("--watch");
+    }
+    if let Some(ref c) = ca {
+        cmd.arg("--ca").arg(c);
+    }
+    if staging {
+        cmd.arg("--staging");
+    }
+    if debug {
+        cmd.arg("--debug");
     }
 
     cmd.stdin(std::process::Stdio::null());

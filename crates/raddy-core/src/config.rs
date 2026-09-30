@@ -342,3 +342,25 @@ pub struct TlsApp {
     #[serde(flatten, default, skip_serializing_if = "HashMap::is_empty")]
     pub extra: HashMap<String, serde_json::Value>,
 }
+
+pub const LETS_ENCRYPT_PRODUCTION: &str = "https://acme-v02.api.letsencrypt.org/directory";
+pub const LETS_ENCRYPT_STAGING: &str = "https://acme-staging-v02.api.letsencrypt.org/directory";
+pub const ZEROSSL_PRODUCTION: &str = "https://acme.zerossl.com/v2/DV90";
+
+/// Resolves standard aliases (e.g. "staging", "dev", "production", "zerossl") to canonical ACME directory URLs.
+pub fn resolve_acme_ca(ca_or_alias: &str) -> String {
+    let lower = ca_or_alias.trim().to_lowercase();
+    match lower.as_str() {
+        "staging" | "dev" | "letsencrypt_staging" | "letsencrypt-staging" | "le_staging" | "le-staging" => {
+            LETS_ENCRYPT_STAGING.to_string()
+        }
+        "production" | "prod" | "letsencrypt" | "letsencrypt_production" | "letsencrypt-production" | "le" => {
+            LETS_ENCRYPT_PRODUCTION.to_string()
+        }
+        "zerossl" | "zerossl_production" | "zerossl-production" => {
+            ZEROSSL_PRODUCTION.to_string()
+        }
+        _ => ca_or_alias.trim().to_string(),
+    }
+}
+

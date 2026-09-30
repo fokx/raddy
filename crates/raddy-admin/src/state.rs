@@ -79,21 +79,24 @@ impl AppState {
                 for h in pending_acme {
                     let tls_clone = tls.clone();
                     let h_clone = h.clone();
+                    tracing::info!("Beginning ACME automated certificate provisioning for '{}'...", h);
                     match tokio::time::timeout(
-                        std::time::Duration::from_secs(15),
+                        std::time::Duration::from_secs(30),
                         tls.provision_identifier(&h, false),
                     ).await {
                         Ok(Ok(())) => {
-                            tracing::info!("ACME certificate ready for '{}'", h_clone);
+                            tracing::info!("ACME certificate ready and installed for '{}'", h_clone);
                         }
                         Ok(Err(e)) => {
-                            tracing::warn!("Failed to auto-provision ACME cert for '{}': {}", h_clone, e);
+                            tracing::error!("Failed to auto-provision ACME cert for '{}': {}", h_clone, e);
                         }
                         Err(_) => {
-                            tracing::info!("ACME provisioning for '{}' continuing in background...", h_clone);
+                            tracing::info!("ACME provisioning for '{}' taking longer than 30s, continuing in background...", h_clone);
                             tokio::spawn(async move {
                                 if let Err(e) = tls_clone.provision_identifier(&h_clone, false).await {
-                                    tracing::warn!("Failed to auto-provision ACME cert for '{}': {}", h_clone, e);
+                                    tracing::error!("Background auto-provisioning failed for '{}': {}", h_clone, e);
+                                } else {
+                                    tracing::info!("Background auto-provisioning succeeded for '{}'", h_clone);
                                 }
                             });
                         }

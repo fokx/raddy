@@ -19,6 +19,9 @@ pub async fn run_command(
     pidfile: Option<&Path>,
     watch: bool,
     environ: bool,
+    ca: Option<String>,
+    staging: bool,
+    debug: bool,
 ) -> Result<()> {
     if environ {
         print_environ();
@@ -30,7 +33,7 @@ pub async fn run_command(
     }
 
     let initial_config = load_or_adapt(config, adapter)?;
-    let res = run_server_loop(initial_config, config, adapter, watch).await;
+    let res = run_server_loop(initial_config, config, adapter, watch, ca, staging, debug).await;
 
     if let Some(p) = pidfile {
         let _ = std::fs::remove_file(p);
@@ -61,7 +64,7 @@ pub async fn file_server_command(
         .map_err(|e| anyhow::anyhow!("Failed to compile file-server config: {}", e))?;
 
     tracing::info!("Starting instant file server for '{}' on http://{}", root.display(), listen);
-    run_server_loop(config, Path::new(""), None, false).await
+    run_server_loop(config, Path::new(""), None, false, None, false, false).await
 }
 
 async fn run_server_loop(
@@ -69,6 +72,9 @@ async fn run_server_loop(
     config_path: &Path,
     adapter: Option<&str>,
     watch: bool,
+    cli_ca: Option<String>,
+    cli_staging: bool,
+    cli_debug: bool,
 ) -> Result<()> {
     let registry = Arc::new(ModuleRegistry::new());
 
@@ -84,12 +90,13 @@ async fn run_server_loop(
         .unwrap_or(false);
 
     tracing::info!("Raddy server initializing...");
-    let (email, ca_url, staging) = if let Some(tls) = initial_config.tls_app() {
+    let (email, mut ca_url, mut staging) = if let Some(tls) = initial_config.tls_app() {
         let is_staging = tls.staging.unwrap_or(false)
             || tls.acme_ca.as_deref().map(|ca| ca.contains("staging")).unwrap_or(false);
         (tls.email, tls.acme_ca, is_staging)
     } else {
         let is_staging = std::env::var("RADDY_ACME_STAGING")
+            .or_else(|_| std::env::var("RADDY_ACME_DEV"))
             .map(|v| v == "1" || v == "true")
             .unwrap_or(false);
         (
@@ -98,6 +105,30 @@ async fn run_server_loop(
             is_staging,
         )
     };
+
+    if cli_staging {
+        staging = true;
+    }
+    if let Some(c) = cli_ca {
+        let resolved = raddy_core::config::resolve_acme_ca(&c);
+        if resolved.contains("staging") {
+            staging = true;
+        }
+        ca_url = Some(resolved);
+    }
+    if staging && ca_url.is_none() {
+        ca_url = Some(raddy_core::config::LETS_ENCRYPT_STAGING.to_string());
+    }
+
+    let ca_display = ca_url.as_deref().unwrap_or(if staging {
+        raddy_core::config::LETS_ENCRYPT_STAGING
+    } else {
+        raddy_core::config::LETS_ENCRYPT_PRODUCTION
+    });
+    tracing::info!("Automated TLS provider: CA='{}' (staging: {})", ca_display, staging);
+    if cli_debug {
+        tracing::debug!("Debug mode active: full tracing enabled for TLS, ACME, and HTTP");
+    }
 
     let tls_manager = if let Some(ref ca) = ca_url {
         Arc::new(TlsManager::new_with_ca(email, ca.clone())?)
@@ -235,7 +266,7 @@ pub async fn respond_command(
         .map_err(|e| anyhow::anyhow!("Failed to compile respond config: {}", e))?;
 
     tracing::info!("Starting instant respond server on http://{}", listen);
-    run_server_loop(config, Path::new(""), None, false).await
+    run_server_loop(config, Path::new(""), None, false, None, false, false).await
 }
 
 /// Executes `raddy reverse-proxy` quick launch command.
@@ -284,5 +315,5 @@ pub async fn reverse_proxy_command(
         .map_err(|e| anyhow::anyhow!("Failed to compile reverse-proxy config: {}", e))?;
 
     tracing::info!("Starting instant reverse proxy from http://{} to {}", from, to_str);
-    run_server_loop(config, Path::new(""), None, false).await
+    run_server_loop(config, Path::new(""), None, false, None, false, false).await
 }

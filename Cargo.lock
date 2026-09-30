@@ -1729,7 +1729,7 @@ dependencies = [
 
 [[package]]
 name = "raddy-server"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -1762,6 +1762,7 @@ dependencies = [
  "instant-acme",
  "ipnet",
  "parking_lot",
+ "pem 3.0.6",
  "raddy-core",
  "rcgen 0.13.2",
  "regex",

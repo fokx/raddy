@@ -101,3 +101,85 @@ async fn test_tls_manager_provision_internal() {
 
     let _ = tokio::fs::remove_dir_all(&temp_dir).await;
 }
+
+#[tokio::test]
+async fn test_caddy_compatibility_and_account_storage() {
+    use raddy_tls::storage::ca_dir_key;
+
+    // Test CA directory key calculation matching Caddy
+    assert_eq!(
+        ca_dir_key("https://acme-v02.api.letsencrypt.org/directory"),
+        "acme-v02.api.letsencrypt.org-directory"
+    );
+    assert_eq!(
+        ca_dir_key("https://acme-staging-v02.api.letsencrypt.org/directory"),
+        "acme-staging-v02.api.letsencrypt.org-directory"
+    );
+    assert_eq!(
+        ca_dir_key("https://acme.zerossl.com/v2/DV90"),
+        "acme.zerossl.com-v2-dv90"
+    );
+
+    let temp_dir = std::env::temp_dir().join("raddy_caddy_compat_test");
+    let storage = FileCertStorage::new(&temp_dir);
+
+    let ca = "https://acme-v02.api.letsencrypt.org/directory";
+    let domain = "xjtu.app";
+
+    // Store cert with CA
+    storage
+        .store_with_ca(domain, "CERT_CHAIN_PEM", "KEY_PEM", Some(ca))
+        .await
+        .expect("Failed to store cert with CA");
+
+    // Verify file layout matches Caddy:
+    // certificates/acme-v02.api.letsencrypt.org-directory/xjtu.app/xjtu.app.crt, .key, .json
+    let caddy_layout_dir = temp_dir
+        .join("certificates")
+        .join("acme-v02.api.letsencrypt.org-directory")
+        .join("xjtu.app");
+
+    assert!(caddy_layout_dir.join("xjtu.app.crt").exists());
+    assert!(caddy_layout_dir.join("xjtu.app.key").exists());
+    assert!(caddy_layout_dir.join("xjtu.app.json").exists());
+
+    // Verify metadata JSON contents
+    let json_str = tokio::fs::read_to_string(caddy_layout_dir.join("xjtu.app.json"))
+        .await
+        .unwrap();
+    assert!(json_str.contains("xjtu.app"));
+    assert!(json_str.contains("acme-v02.api.letsencrypt.org"));
+
+    // Verify loading and existence check
+    assert!(storage.exists(domain).await);
+    let loaded = storage.load(domain).await.unwrap().expect("Cert not found");
+    assert_eq!(loaded.0, "CERT_CHAIN_PEM");
+    assert_eq!(loaded.1, "KEY_PEM");
+
+    // Test ACME account persistence
+    let account_json = r#"{"id":"https://acme-v02.api.letsencrypt.org/acme/acct/12345"}"#;
+    let account_key = "ACME_PRIV_KEY";
+    storage
+        .store_account(ca, Some("you@example.com"), account_json, Some(account_key))
+        .await
+        .expect("Failed to store ACME account");
+
+    let account_dir = temp_dir
+        .join("acme")
+        .join("acme-v02.api.letsencrypt.org-directory")
+        .join("users")
+        .join("you@example.com");
+
+    assert!(account_dir.join("you@example.com.json").exists());
+    assert!(account_dir.join("you@example.com.key").exists());
+
+    let loaded_account = storage
+        .load_account(ca, Some("you@example.com"))
+        .await
+        .unwrap()
+        .expect("Account not found");
+    assert_eq!(loaded_account, account_json);
+
+    let _ = tokio::fs::remove_dir_all(&temp_dir).await;
+}
+
