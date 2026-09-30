@@ -1,6 +1,6 @@
 [package]
 name = "raddy-http"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 license = "Apache-2.0"
 description = "HTTP/1.1, HTTP/2, HTTP/3 QUIC servers, routing engine, and directives for Raddy"
@@ -10,7 +10,7 @@ keywords = ["caddy", "http", "http2", "http3", "quic"]
 categories = ["network-programming", "web-programming::http-server"]
 
 [dependencies]
-raddy-core = { version = "0.1.0", path = "../raddy-core" }
+raddy-core = { version = "0.2.0", path = "../raddy-core" }
 tokio = { version = "1", features = ["full"] }
 hyper = { version = "1", features = ["full"] }
 hyper-util = { version = "0.1", features = ["full"] }
@@ -24,12 +24,12 @@ async-trait = "0.1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 mime_guess = "2"
-raddy-tls = { version = "0.1.0", path = "../raddy-tls" }
+raddy-tls = { version = "0.2.0", path = "../raddy-tls" }
 tokio-rustls = "0.26"
 rustls = "0.23"
 rustls-pki-types = "1"
 rustls-pemfile = "2"
-raddy-proxy = { version = "0.1.0", path = "../raddy-proxy" }
+raddy-proxy = { version = "0.2.0", path = "../raddy-proxy" }
 quinn = { version = "0.11", default-features = false, features = ["runtime-tokio", "rustls-aws-lc-rs"] }
 h3 = "0.0.8"
 h3-quinn = "0.0.10"
@@ -46,6 +46,6 @@ regex = "1.13.1"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }
-raddy-caddyfile = { version = "0.1.0", path = "../raddy-caddyfile" }
+raddy-caddyfile = { version = "0.2.0", path = "../raddy-caddyfile" }
 
 

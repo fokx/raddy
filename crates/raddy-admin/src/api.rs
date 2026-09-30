@@ -38,7 +38,7 @@ async fn get_status() -> impl IntoResponse {
     Json(serde_json::json!({
         "status": "ok",
         "app": "raddy",
-        "version": "0.1.0"
+        "version": env!("CARGO_PKG_VERSION")
     }))
 }
 
