@@ -97,7 +97,16 @@ async fn handle_h3_stream(
     stream.send_response(resp).await?;
 
     let mut body_len = 0;
-    if let Some(body) = ctx.response_body.clone() {
+    if let Some(mut stream_body) = ctx.response_stream.take() {
+        use futures_util::StreamExt;
+        while let Some(chunk_res) = stream_body.next().await {
+            let chunk = chunk_res?;
+            if !chunk.is_empty() {
+                body_len += chunk.len();
+                stream.send_data(chunk).await?;
+            }
+        }
+    } else if let Some(body) = ctx.response_body.take() {
         if !body.is_empty() {
             body_len = body.len();
             stream.send_data(body).await?;

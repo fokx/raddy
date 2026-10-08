@@ -1,6 +1,6 @@
 [package]
 name = "raddy-server"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 license = "Apache-2.0"
 description = "Fast, extensible, memory-safe web server and reverse proxy in Rust (Caddy drop-in replacement)"
@@ -30,12 +30,12 @@ members = [
 ]
 
 [dependencies]
-raddy-core = { version = "0.2.0", path = "crates/raddy-core" }
-raddy-caddyfile = { version = "0.2.0", path = "crates/raddy-caddyfile" }
-raddy-http = { version = "0.2.0", path = "crates/raddy-http" }
-raddy-tls = { version = "0.2.0", path = "crates/raddy-tls" }
-raddy-proxy = { version = "0.2.0", path = "crates/raddy-proxy" }
-raddy-admin = { version = "0.2.0", path = "crates/raddy-admin" }
+raddy-core = { version = "0.3.0", path = "crates/raddy-core" }
+raddy-caddyfile = { version = "0.3.0", path = "crates/raddy-caddyfile" }
+raddy-http = { version = "0.3.0", path = "crates/raddy-http" }
+raddy-tls = { version = "0.3.0", path = "crates/raddy-tls" }
+raddy-proxy = { version = "0.3.0", path = "crates/raddy-proxy" }
+raddy-admin = { version = "0.3.0", path = "crates/raddy-admin" }
 
 tokio = { version = "1", features = ["full"] }
 clap = { version = "4", features = ["derive"] }

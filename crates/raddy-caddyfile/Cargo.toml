@@ -1,6 +1,6 @@
 [package]
 name = "raddy-caddyfile"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 license = "Apache-2.0"
 description = "Caddyfile lexer, parser, preprocessor, and JSON adapter for Raddy"
@@ -10,7 +10,7 @@ keywords = ["caddy", "caddyfile", "parser", "lexer", "raddy"]
 categories = ["parser-implementations", "config"]
 
 [dependencies]
-raddy-core = { version = "0.2.0", path = "../raddy-core" }
+raddy-core = { version = "0.3.0", path = "../raddy-core" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"

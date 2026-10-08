@@ -1604,7 +1604,7 @@ checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
 
 [[package]]
 name = "raddy-admin"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -1627,7 +1627,7 @@ dependencies = [
 
 [[package]]
 name = "raddy-caddyfile"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -1642,12 +1642,13 @@ dependencies = [
 
 [[package]]
 name = "raddy-core"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "arc-swap",
  "async-trait",
  "bytes",
+ "futures-core",
  "http",
  "inventory",
  "ipnet",
@@ -1661,7 +1662,7 @@ dependencies = [
 
 [[package]]
 name = "raddy-http"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1670,10 +1671,12 @@ dependencies = [
  "bytes",
  "chrono",
  "flate2",
+ "futures-util",
  "h3",
  "h3-quinn",
  "http",
  "http-body-util",
+ "httpdate",
  "hyper",
  "hyper-util",
  "mime_guess",
@@ -1695,13 +1698,14 @@ dependencies = [
  "thiserror",
  "tokio",
  "tokio-rustls",
+ "tokio-util",
  "tracing",
  "zstd",
 ]
 
 [[package]]
 name = "raddy-proxy"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1729,7 +1733,7 @@ dependencies = [
 
 [[package]]
 name = "raddy-server"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -1755,7 +1759,7 @@ dependencies = [
 
 [[package]]
 name = "raddy-tls"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1780,7 +1784,7 @@ dependencies = [
 
 [[package]]
 name = "raddyserver"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "raddy-server",

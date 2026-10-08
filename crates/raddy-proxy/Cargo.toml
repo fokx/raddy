@@ -1,6 +1,6 @@
 [package]
 name = "raddy-proxy"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 license = "Apache-2.0"
 description = "Reverse proxy, load balancers, health checks, and forward proxy for Raddy"
@@ -10,7 +10,7 @@ keywords = ["caddy", "reverse-proxy", "load-balancer", "forward-proxy", "raddy"]
 categories = ["network-programming", "web-programming::http-server"]
 
 [dependencies]
-raddy-core = { version = "0.2.0", path = "../raddy-core" }
+raddy-core = { version = "0.3.0", path = "../raddy-core" }
 tokio = { version = "1", features = ["full"] }
 hyper = { version = "1", features = ["full"] }
 hyper-util = { version = "0.1", features = ["full"] }

@@ -1,6 +1,6 @@
 [package]
 name = "raddy-core"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 license = "Apache-2.0"
 description = "Core runtime, configuration schemas, matchers, and handler interfaces for Raddy"
@@ -23,3 +23,4 @@ http = "1"
 bytes = "1"
 regex = "1"
 ipnet = "2"
+futures-core = "0.3"

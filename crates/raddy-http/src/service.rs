@@ -2,12 +2,22 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use bytes::Bytes;
 use http::{HeaderValue, Response, StatusCode};
-use http_body_util::{BodyExt, Full};
+use hyper::body::Frame;
+use http_body_util::combinators::BoxBody;
+use http_body_util::{BodyExt, Full, StreamBody};
 use hyper::body::Incoming;
 use hyper::Request;
 use raddy_core::context::Context;
 use crate::logging::LogPipeline;
 use crate::router::VirtualHostRouter;
+
+pub type ResponseBoxBody = BoxBody<Bytes, std::io::Error>;
+
+fn full_box_body(bytes: Bytes) -> ResponseBoxBody {
+    Full::new(bytes)
+        .map_err(|never: std::convert::Infallible| -> std::io::Error { match never {} })
+        .boxed()
+}
 
 /// Service handler for incoming Hyper HTTP requests.
 pub async fn handle_request(
@@ -19,7 +29,7 @@ pub async fn handle_request(
     log_pipeline: Option<Arc<LogPipeline>>,
     server_logs: Option<raddy_core::config::ServerLogConfig>,
     tls_server_name: Option<String>,
-) -> std::result::Result<Response<Full<Bytes>>, std::convert::Infallible> {
+) -> std::result::Result<Response<ResponseBoxBody>, std::convert::Infallible> {
     let start_time = std::time::Instant::now();
     let on_upgrade = hyper::upgrade::on(&mut req);
     let (mut parts, incoming_body) = req.into_parts();
@@ -34,7 +44,7 @@ pub async fn handle_request(
                 let resp = Response::builder()
                     .status(StatusCode::OK)
                     .header(http::header::CONTENT_TYPE, "text/plain")
-                    .body(Full::new(Bytes::from(key_auth)))
+                    .body(full_box_body(Bytes::from(key_auth)))
                     .unwrap();
                 return Ok(resp);
             } else {
@@ -92,11 +102,25 @@ pub async fn handle_request(
         resp_builder = resp_builder.header(k, v);
     }
 
-    let body = ctx.response_body.clone().unwrap_or_default();
-    let body_len = body.len();
+    let body_len = ctx
+        .response_headers
+        .get(http::header::CONTENT_LENGTH)
+        .and_then(|val| val.to_str().ok())
+        .and_then(|s| s.parse::<usize>().ok())
+        .or_else(|| ctx.response_body.as_ref().map(|b| b.len()))
+        .unwrap_or(0);
+
+    let body: ResponseBoxBody = if let Some(stream) = ctx.response_stream.take() {
+        use futures_util::StreamExt;
+        let frame_stream = stream.map(|res| res.map(Frame::data));
+        BodyExt::boxed(StreamBody::new(frame_stream))
+    } else {
+        full_box_body(ctx.response_body.take().unwrap_or_default())
+    };
+
     let resp = resp_builder
-        .body(Full::new(body))
-        .unwrap_or_else(|_| Response::new(Full::new(Bytes::from("500 Internal Error"))));
+        .body(body)
+        .unwrap_or_else(|_| Response::new(full_box_body(Bytes::from("500 Internal Error"))));
 
     let duration = start_time.elapsed();
     if let Some(ref pl) = log_pipeline {

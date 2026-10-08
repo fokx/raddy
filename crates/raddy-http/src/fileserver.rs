@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 use async_trait::async_trait;
+use bytes::Bytes;
 use http::{HeaderValue, StatusCode};
 use raddy_core::context::Context;
 use raddy_core::error::Result;
@@ -102,8 +103,74 @@ impl Handler for FileServerHandler {
     }
 }
 
+const STREAM_THRESHOLD: u64 = 64 * 1024; // 64 KB
+const CHUNK_SIZE: usize = 64 * 1024; // 64 KB read buffer
+
+#[derive(Debug, PartialEq, Eq)]
+enum FileRange {
+    Full,
+    Partial(u64, u64),
+    NotSatisfiable,
+}
+
+fn parse_range(range_header: &str, file_len: u64) -> FileRange {
+    if file_len == 0 {
+        return FileRange::NotSatisfiable;
+    }
+    let range_header = range_header.trim();
+    if !range_header.starts_with("bytes=") {
+        return FileRange::Full;
+    }
+    let spec = &range_header["bytes=".len()..].trim();
+    let first_range = spec.split(',').next().unwrap_or("").trim();
+    let parts: Vec<&str> = first_range.split('-').collect();
+    if parts.len() != 2 {
+        return FileRange::Full;
+    }
+    let (start_str, end_str) = (parts[0].trim(), parts[1].trim());
+    if start_str.is_empty() {
+        if let Ok(suffix) = end_str.parse::<u64>() {
+            if suffix == 0 {
+                return FileRange::NotSatisfiable;
+            }
+            let start = if suffix >= file_len { 0 } else { file_len - suffix };
+            let end = file_len - 1;
+            FileRange::Partial(start, end)
+        } else {
+            FileRange::Full
+        }
+    } else if end_str.is_empty() {
+        if let Ok(start) = start_str.parse::<u64>() {
+            if start >= file_len {
+                FileRange::NotSatisfiable
+            } else {
+                FileRange::Partial(start, file_len - 1)
+            }
+        } else {
+            FileRange::Full
+        }
+    } else if let (Ok(start), Ok(end)) = (start_str.parse::<u64>(), end_str.parse::<u64>()) {
+        if start > end || start >= file_len {
+            FileRange::NotSatisfiable
+        } else {
+            let end = std::cmp::min(end, file_len - 1);
+            FileRange::Partial(start, end)
+        }
+    } else {
+        FileRange::Full
+    }
+}
+
 async fn serve_file(file_path: &Path, ctx: &mut Context) -> Result<()> {
-    let metadata = match tokio::fs::metadata(file_path).await {
+    let mut file = match tokio::fs::File::open(file_path).await {
+        Ok(f) => f,
+        Err(_) => {
+            ctx.set_response(StatusCode::NOT_FOUND, "404 Not Found\n");
+            return Ok(());
+        }
+    };
+
+    let metadata = match file.metadata().await {
         Ok(m) => m,
         Err(_) => {
             ctx.set_response(StatusCode::NOT_FOUND, "404 Not Found\n");
@@ -136,27 +203,119 @@ async fn serve_file(file_path: &Path, ctx: &mut Context) -> Result<()> {
         }
     }
 
-    let contents = match tokio::fs::read(file_path).await {
-        Ok(c) => c,
-        Err(e) => {
-            ctx.set_response(StatusCode::INTERNAL_SERVER_ERROR, format!("500 Error reading file: {}\n", e));
-            return Ok(());
+    // Check If-Modified-Since for 304 Not Modified
+    if let Some(ims) = ctx.headers.get(http::header::IF_MODIFIED_SINCE) {
+        if let Ok(ims_str) = ims.to_str() {
+            if let Ok(ims_time) = httpdate::parse_http_date(ims_str) {
+                if let Ok(mtime) = metadata.modified() {
+                    let mtime_secs = mtime.duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+                    let ims_secs = ims_time.duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+                    if mtime_secs <= ims_secs {
+                        ctx.status = Some(StatusCode::NOT_MODIFIED);
+                        ctx.response_written = true;
+                        if let Ok(val) = HeaderValue::try_from(&etag) {
+                            ctx.response_headers.insert(http::header::ETAG, val);
+                        }
+                        return Ok(());
+                    }
+                }
+            }
         }
-    };
+    }
 
     let mime_type = mime_guess::from_path(file_path).first_or_octet_stream();
 
     if let Ok(val) = HeaderValue::try_from(mime_type.as_ref()) {
         ctx.response_headers.insert(http::header::CONTENT_TYPE, val);
     }
-    if let Ok(val) = HeaderValue::try_from(file_len.to_string()) {
-        ctx.response_headers.insert(http::header::CONTENT_LENGTH, val);
-    }
     if let Ok(val) = HeaderValue::try_from(&etag) {
         ctx.response_headers.insert(http::header::ETAG, val);
     }
+    if let Ok(mtime) = metadata.modified() {
+        if let Ok(val) = HeaderValue::try_from(httpdate::fmt_http_date(mtime)) {
+            ctx.response_headers.insert(http::header::LAST_MODIFIED, val);
+        }
+    }
+    ctx.response_headers.insert(
+        http::header::ACCEPT_RANGES,
+        HeaderValue::from_static("bytes"),
+    );
 
-    ctx.set_response(StatusCode::OK, contents);
+    let range = ctx
+        .headers
+        .get(http::header::RANGE)
+        .and_then(|r| r.to_str().ok())
+        .map(|r| parse_range(r, file_len));
+
+    let (status, start, length) = match range {
+        Some(FileRange::Partial(start, end)) => {
+            let length = end - start + 1;
+            if let Ok(val) = HeaderValue::try_from(format!("bytes {}-{}/{}", start, end, file_len)) {
+                ctx.response_headers.insert(http::header::CONTENT_RANGE, val);
+            }
+            if let Ok(val) = HeaderValue::try_from(length.to_string()) {
+                ctx.response_headers.insert(http::header::CONTENT_LENGTH, val);
+            }
+            (StatusCode::PARTIAL_CONTENT, start, length)
+        }
+        Some(FileRange::NotSatisfiable) => {
+            if let Ok(val) = HeaderValue::try_from(format!("bytes */{}", file_len)) {
+                ctx.response_headers.insert(http::header::CONTENT_RANGE, val);
+            }
+            ctx.set_response(StatusCode::RANGE_NOT_SATISFIABLE, Bytes::new());
+            return Ok(());
+        }
+        _ => {
+            if let Ok(val) = HeaderValue::try_from(file_len.to_string()) {
+                ctx.response_headers.insert(http::header::CONTENT_LENGTH, val);
+            }
+            (StatusCode::OK, 0, file_len)
+        }
+    };
+
+    // If HEAD request, set headers and return empty body
+    if ctx.method == http::Method::HEAD {
+        ctx.status = Some(status);
+        ctx.response_body = Some(Bytes::new());
+        ctx.response_written = true;
+        return Ok(());
+    }
+
+    if length == 0 {
+        ctx.set_response(status, Bytes::new());
+        return Ok(());
+    }
+
+    use tokio::io::{AsyncReadExt, AsyncSeekExt};
+
+    // For small payloads (<= STREAM_THRESHOLD), read into memory to avoid stream overhead and support middleware/tests
+    if length <= STREAM_THRESHOLD {
+        if start > 0 {
+            if let Err(e) = file.seek(std::io::SeekFrom::Start(start)).await {
+                ctx.set_response(StatusCode::INTERNAL_SERVER_ERROR, format!("500 Seek error: {}\n", e));
+                return Ok(());
+            }
+        }
+        let mut buf = vec![0u8; length as usize];
+        if let Err(e) = file.read_exact(&mut buf).await {
+            ctx.set_response(StatusCode::INTERNAL_SERVER_ERROR, format!("500 Read error: {}\n", e));
+            return Ok(());
+        }
+        ctx.set_response(status, buf);
+        return Ok(());
+    }
+
+    // For large files (> 64KB, several GBs), STREAM chunks without loading the whole file into RAM!
+    if start > 0 {
+        if let Err(e) = file.seek(std::io::SeekFrom::Start(start)).await {
+            ctx.set_response(StatusCode::INTERNAL_SERVER_ERROR, format!("500 Seek error: {}\n", e));
+            return Ok(());
+        }
+    }
+
+    let limited = file.take(length);
+    let stream = tokio_util::io::ReaderStream::with_capacity(limited, CHUNK_SIZE);
+    ctx.set_response_stream(status, stream);
     Ok(())
 }
 

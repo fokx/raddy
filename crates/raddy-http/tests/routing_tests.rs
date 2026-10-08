@@ -433,4 +433,150 @@ async fn test_user_caddyfile_live_file_server_and_handle_path() {
     let _ = tokio::fs::remove_dir_all(&temp_root).await;
 }
 
+#[tokio::test]
+async fn test_large_file_streaming_and_range_requests() {
+    use futures_util::StreamExt;
+
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let temp_dir = std::env::temp_dir().join(format!("raddy_test_large_file_{}", nanos));
+    tokio::fs::create_dir_all(&temp_dir).await.unwrap();
+
+    // Create a 256KB file (> 64KB STREAM_THRESHOLD)
+    let file_size = 256 * 1024;
+    let mut test_data = Vec::with_capacity(file_size);
+    for i in 0..file_size {
+        test_data.push((i % 251) as u8);
+    }
+    let file_path = temp_dir.join("large_payload.bin");
+    tokio::fs::write(&file_path, &test_data).await.unwrap();
+
+    let mut server = HttpServer::default();
+    server.listen = vec![":80".into()];
+    server.routes.push(Route {
+        r#match: None,
+        handle: vec![HandlerConfig::new("file_server")
+            .with_field("root", temp_dir.to_str().unwrap())],
+        terminal: Some(true),
+        group: None,
+    });
+
+    let registry = ModuleRegistry::new();
+    let vhost_router = compile_virtual_host_router(&server, &registry).unwrap();
+
+    // 1. GET full large file -> verify it is STREAMED (response_stream is Some, response_body is None)
+    let mut ctx = Context::new(Method::GET, Uri::from_static("/large_payload.bin"), HeaderMap::new(), Bytes::new());
+    vhost_router.route_request(&mut ctx).await.unwrap();
+    assert_eq!(ctx.status, Some(StatusCode::OK));
+    assert_eq!(ctx.response_body, None, "Large file must not be buffered into response_body");
+    assert!(ctx.response_stream.is_some(), "Large file must be provided via response_stream");
+    assert_eq!(
+        ctx.response_headers.get(http::header::CONTENT_LENGTH).unwrap(),
+        &file_size.to_string()
+    );
+    assert_eq!(
+        ctx.response_headers.get(http::header::ACCEPT_RANGES).unwrap(),
+        "bytes"
+    );
+
+    // Consume the stream and verify all bytes match
+    let mut streamed_bytes = Vec::new();
+    let mut stream = ctx.response_stream.take().unwrap();
+    while let Some(chunk_res) = stream.next().await {
+        let chunk = chunk_res.unwrap();
+        streamed_bytes.extend_from_slice(&chunk);
+    }
+    assert_eq!(streamed_bytes, test_data);
+
+    // 2. HEAD request -> returns headers with Content-Length, empty body
+    let mut ctx = Context::new(Method::HEAD, Uri::from_static("/large_payload.bin"), HeaderMap::new(), Bytes::new());
+    vhost_router.route_request(&mut ctx).await.unwrap();
+    assert_eq!(ctx.status, Some(StatusCode::OK));
+    assert!(ctx.response_stream.is_none(), "HEAD request must not open stream");
+    assert_eq!(ctx.response_body, Some(Bytes::new()));
+    assert_eq!(
+        ctx.response_headers.get(http::header::CONTENT_LENGTH).unwrap(),
+        &file_size.to_string()
+    );
+
+    // 3. Partial Content: Range: bytes=100-199
+    let mut headers = HeaderMap::new();
+    headers.insert(http::header::RANGE, "bytes=100-199".parse().unwrap());
+    let mut ctx = Context::new(Method::GET, Uri::from_static("/large_payload.bin"), headers, Bytes::new());
+    vhost_router.route_request(&mut ctx).await.unwrap();
+    assert_eq!(ctx.status, Some(StatusCode::PARTIAL_CONTENT));
+    assert_eq!(
+        ctx.response_headers.get(http::header::CONTENT_RANGE).unwrap(),
+        &format!("bytes 100-199/{}", file_size)
+    );
+    assert_eq!(
+        ctx.response_headers.get(http::header::CONTENT_LENGTH).unwrap(),
+        "100"
+    );
+    // 100 bytes is <= STREAM_THRESHOLD, so read into buffer
+    assert_eq!(ctx.response_body.as_ref().unwrap().as_ref(), &test_data[100..=199]);
+
+    // 4. Suffix Range: Range: bytes=-50 (last 50 bytes)
+    let mut headers = HeaderMap::new();
+    headers.insert(http::header::RANGE, "bytes=-50".parse().unwrap());
+    let mut ctx = Context::new(Method::GET, Uri::from_static("/large_payload.bin"), headers, Bytes::new());
+    vhost_router.route_request(&mut ctx).await.unwrap();
+    assert_eq!(ctx.status, Some(StatusCode::PARTIAL_CONTENT));
+    let expected_start = file_size - 50;
+    let expected_end = file_size - 1;
+    assert_eq!(
+        ctx.response_headers.get(http::header::CONTENT_RANGE).unwrap(),
+        &format!("bytes {}-{}/{}", expected_start, expected_end, file_size)
+    );
+    assert_eq!(ctx.response_body.as_ref().unwrap().as_ref(), &test_data[expected_start..=expected_end]);
+
+    // 5. Invalid Range: Range: bytes=9999999- -> 416 Range Not Satisfiable
+    let mut headers = HeaderMap::new();
+    headers.insert(http::header::RANGE, "bytes=9999999-".parse().unwrap());
+    let mut ctx = Context::new(Method::GET, Uri::from_static("/large_payload.bin"), headers, Bytes::new());
+    vhost_router.route_request(&mut ctx).await.unwrap();
+    assert_eq!(ctx.status, Some(StatusCode::RANGE_NOT_SATISFIABLE));
+    assert_eq!(
+        ctx.response_headers.get(http::header::CONTENT_RANGE).unwrap(),
+        &format!("bytes */{}", file_size)
+    );
+
+    // 6. Live TCP end-to-end streaming over HTTP socket
+    let mut instance = HttpServerInstance::new("large_file_tcp_test", "127.0.0.1:0", vhost_router);
+    instance.bind().await.expect("Failed to bind TCP listener");
+    let bound_addr = instance.local_addr().expect("Missing local addr");
+
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    let server_handle = tokio::spawn(async move {
+        instance.run(shutdown_rx).await
+    });
+
+    let client = reqwest::Client::new();
+    let resp = client.get(format!("http://{}/large_payload.bin", bound_addr)).send().await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(resp.headers().get("content-length").unwrap(), &file_size.to_string());
+    assert_eq!(resp.headers().get("accept-ranges").unwrap(), "bytes");
+    let received_bytes = resp.bytes().await.unwrap();
+    assert_eq!(received_bytes.as_ref(), &test_data[..]);
+
+    // Range request over live HTTP socket
+    let resp = client
+        .get(format!("http://{}/large_payload.bin", bound_addr))
+        .header("Range", "bytes=500-999")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::PARTIAL_CONTENT);
+    assert_eq!(resp.headers().get("content-range").unwrap(), &format!("bytes 500-999/{}", file_size));
+    let received_chunk = resp.bytes().await.unwrap();
+    assert_eq!(received_chunk.as_ref(), &test_data[500..=999]);
+
+    // Cleanup
+    shutdown_tx.send(true).unwrap();
+    server_handle.await.unwrap().unwrap();
+    let _ = tokio::fs::remove_dir_all(&temp_dir).await;
+}
+
 

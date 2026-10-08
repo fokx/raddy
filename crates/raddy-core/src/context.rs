@@ -1,12 +1,15 @@
 use std::collections::HashMap;
 use std::net::SocketAddr;
+use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use http::{HeaderMap, HeaderValue, Method, StatusCode, Uri};
 use bytes::Bytes;
+use futures_core::Stream;
 use crate::placeholder::PlaceholderProvider;
 
+pub type BoxBodyStream = Pin<Box<dyn Stream<Item = std::io::Result<Bytes>> + Send + Sync + 'static>>;
+
 /// Request/Response Context flowing through the middleware and handler chain.
-#[derive(Debug, Clone)]
 pub struct Context {
     // Request metadata
     pub method: Method,
@@ -26,6 +29,7 @@ pub struct Context {
     pub status: Option<StatusCode>,
     pub response_headers: HeaderMap,
     pub response_body: Option<Bytes>,
+    pub response_stream: Option<BoxBodyStream>,
     pub response_written: bool,
 
     // Logging control state
@@ -64,6 +68,7 @@ impl Context {
             status: None,
             response_headers: HeaderMap::new(),
             response_body: None,
+            response_stream: None,
             response_written: false,
             log_skip: false,
             log_name: None,
@@ -96,7 +101,67 @@ impl Context {
     pub fn set_response(&mut self, status: StatusCode, body: impl Into<Bytes>) {
         self.status = Some(status);
         self.response_body = Some(body.into());
+        self.response_stream = None;
         self.response_written = true;
+    }
+
+    pub fn set_response_stream<S>(&mut self, status: StatusCode, stream: S)
+    where
+        S: Stream<Item = std::io::Result<Bytes>> + Send + Sync + 'static,
+    {
+        self.status = Some(status);
+        self.response_body = None;
+        self.response_stream = Some(Box::pin(stream));
+        self.response_written = true;
+    }
+}
+
+impl Clone for Context {
+    fn clone(&self) -> Self {
+        Self {
+            method: self.method.clone(),
+            orig_method: self.orig_method.clone(),
+            uri: self.uri.clone(),
+            orig_uri: self.orig_uri.clone(),
+            headers: self.headers.clone(),
+            remote_addr: self.remote_addr,
+            tls_server_name: self.tls_server_name.clone(),
+            body: self.body.clone(),
+            extensions: self.extensions.clone(),
+            vars: self.vars.clone(),
+            status: self.status,
+            response_headers: self.response_headers.clone(),
+            response_body: self.response_body.clone(),
+            response_stream: None,
+            response_written: self.response_written,
+            log_skip: self.log_skip,
+            log_name: self.log_name.clone(),
+            log_appends: self.log_appends.clone(),
+        }
+    }
+}
+
+impl std::fmt::Debug for Context {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Context")
+            .field("method", &self.method)
+            .field("orig_method", &self.orig_method)
+            .field("uri", &self.uri)
+            .field("orig_uri", &self.orig_uri)
+            .field("headers", &self.headers)
+            .field("remote_addr", &self.remote_addr)
+            .field("tls_server_name", &self.tls_server_name)
+            .field("body_len", &self.body.len())
+            .field("vars", &self.vars)
+            .field("status", &self.status)
+            .field("response_headers", &self.response_headers)
+            .field("response_body_len", &self.response_body.as_ref().map(|b| b.len()))
+            .field("has_response_stream", &self.response_stream.is_some())
+            .field("response_written", &self.response_written)
+            .field("log_skip", &self.log_skip)
+            .field("log_name", &self.log_name)
+            .field("log_appends", &self.log_appends)
+            .finish()
     }
 }
 
