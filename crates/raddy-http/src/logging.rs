@@ -1,3 +1,9 @@
+use http::StatusCode;
+use raddy_core::PlaceholderProvider;
+use raddy_core::config::{Config, LogConfig, LogSamplingConfig, ServerLogConfig};
+use raddy_core::context::Context;
+use regex::Regex;
+use ring::digest::{SHA256, digest};
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::io::Write;
@@ -5,12 +11,6 @@ use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use http::StatusCode;
-use regex::Regex;
-use ring::digest::{digest, SHA256};
-use raddy_core::config::{Config, LogConfig, LogSamplingConfig, ServerLogConfig};
-use raddy_core::context::Context;
-use raddy_core::PlaceholderProvider;
 
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
@@ -79,7 +79,10 @@ impl LogPipeline {
 
         // 2. Server log configuration lookup
         if let Some(srv_logs) = server_logs {
-            let host = ctx.get_placeholder("host").unwrap_or_default().to_lowercase();
+            let host = ctx
+                .get_placeholder("host")
+                .unwrap_or_default()
+                .to_lowercase();
             let host_clean = host.split(':').next().unwrap_or(&host);
 
             if let Some(ref names) = srv_logs.logger_names {
@@ -142,9 +145,10 @@ impl LoggerInstance {
         let encoder = Arc::new(LogEncoder::from_config(cfg.encoder.as_ref()));
         let level = parse_level(cfg.level.as_deref().unwrap_or("INFO"));
 
-        let sampler = cfg.sampling.as_ref().map(|s| {
-            Arc::new(Mutex::new(LogSampler::new(s)))
-        });
+        let sampler = cfg
+            .sampling
+            .as_ref()
+            .map(|s| Arc::new(Mutex::new(LogSampler::new(s))));
 
         Self {
             name: name.to_string(),
@@ -161,12 +165,16 @@ impl LoggerInstance {
         if self.include.is_empty() {
             return false;
         }
-        if self.exclude.iter().any(|exc| exc == topic || topic.starts_with(exc)) {
+        if self
+            .exclude
+            .iter()
+            .any(|exc| exc == topic || topic.starts_with(exc))
+        {
             return false;
         }
-        self.include.iter().any(|inc| {
-            inc == topic || topic.starts_with(inc) || inc == "*"
-        })
+        self.include
+            .iter()
+            .any(|inc| inc == topic || topic.starts_with(inc) || inc == "*")
     }
 
     pub fn log(
@@ -193,11 +201,22 @@ impl LoggerInstance {
             }
         }
 
-        let raw_entry = self.build_access_entry(ctx, duration, status, body_len, log_credentials, record_level);
+        let raw_entry = self.build_access_entry(
+            ctx,
+            duration,
+            status,
+            body_len,
+            log_credentials,
+            record_level,
+        );
         let encoded_line = self.encoder.encode(&raw_entry, &self.name, record_level);
 
         if let Err(e) = self.writer.write_line(&encoded_line) {
-            tracing::warn!("Failed to write access log to logger '{}': {}", self.name, e);
+            tracing::warn!(
+                "Failed to write access log to logger '{}': {}",
+                self.name,
+                e
+            );
         }
     }
 
@@ -216,8 +235,14 @@ impl LoggerInstance {
             .map(|d| d.as_secs_f64())
             .unwrap_or(0.0);
 
-        let remote_ip = ctx.remote_addr.map(|a| a.ip().to_string()).unwrap_or_default();
-        let remote_port = ctx.remote_addr.map(|a| a.port().to_string()).unwrap_or_default();
+        let remote_ip = ctx
+            .remote_addr
+            .map(|a| a.ip().to_string())
+            .unwrap_or_default();
+        let remote_port = ctx
+            .remote_addr
+            .map(|a| a.port().to_string())
+            .unwrap_or_default();
         let client_ip = ctx
             .headers
             .get("x-forwarded-for")
@@ -233,7 +258,12 @@ impl LoggerInstance {
         };
 
         let host = ctx.get_placeholder("host").unwrap_or_default();
-        let uri = ctx.uri.path_and_query().map(|pq| pq.as_str()).unwrap_or("/").to_string();
+        let uri = ctx
+            .uri
+            .path_and_query()
+            .map(|pq| pq.as_str())
+            .unwrap_or("/")
+            .to_string();
 
         let mut req_headers = serde_json::Map::new();
         for (name, val) in &ctx.headers {
@@ -429,7 +459,8 @@ impl FileWriterInner {
 
         #[cfg(unix)]
         if let Some(mode) = self.options.mode {
-            let _ = std::fs::set_permissions(&self.file_path, std::fs::Permissions::from_mode(mode));
+            let _ =
+                std::fs::set_permissions(&self.file_path, std::fs::Permissions::from_mode(mode));
         }
 
         self.file = Some(file);
@@ -466,13 +497,25 @@ impl FileWriterInner {
         }
 
         let timestamp_str = if self.options.roll_local_time {
-            chrono::Local::now().format(&self.options.backup_time_format).to_string()
+            chrono::Local::now()
+                .format(&self.options.backup_time_format)
+                .to_string()
         } else {
-            chrono::Utc::now().format(&self.options.backup_time_format).to_string()
+            chrono::Utc::now()
+                .format(&self.options.backup_time_format)
+                .to_string()
         };
 
-        let file_stem = self.file_path.file_stem().and_then(|s| s.to_str()).unwrap_or("log");
-        let file_ext = self.file_path.extension().and_then(|s| s.to_str()).unwrap_or("log");
+        let file_stem = self
+            .file_path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("log");
+        let file_ext = self
+            .file_path
+            .extension()
+            .and_then(|s| s.to_str())
+            .unwrap_or("log");
         let parent_dir = self.file_path.parent().unwrap_or_else(|| Path::new("."));
 
         let rolled_name = format!("{}-{}-{}.{}", file_stem, timestamp_str, reason, file_ext);
@@ -486,9 +529,12 @@ impl FileWriterInner {
                 let gz_path = parent_dir.join(format!("{}.gz", rolled_name));
                 if let Ok(src_file) = File::open(&rolled_path) {
                     if let Ok(dst_file) = File::create(&gz_path) {
-                        let mut encoder = flate2::write::GzEncoder::new(dst_file, flate2::Compression::default());
+                        let mut encoder =
+                            flate2::write::GzEncoder::new(dst_file, flate2::Compression::default());
                         let mut reader = std::io::BufReader::new(src_file);
-                        if std::io::copy(&mut reader, &mut encoder).is_ok() && encoder.finish().is_ok() {
+                        if std::io::copy(&mut reader, &mut encoder).is_ok()
+                            && encoder.finish().is_ok()
+                        {
                             let _ = std::fs::remove_file(&rolled_path);
                         }
                     }
@@ -505,15 +551,22 @@ impl FileWriterInner {
 
     fn cleanup_old_logs(&self, dir: &Path, file_stem: &str, file_ext: &str) {
         let prefix = format!("{}-", file_stem);
-        let Ok(entries) = std::fs::read_dir(dir) else { return };
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
 
         let mut matching_files: Vec<(PathBuf, SystemTime)> = Vec::new();
 
         for entry in entries.flatten() {
             let path = entry.path();
             if let Some(fname) = path.file_name().and_then(|s| s.to_str()) {
-                if fname.starts_with(&prefix) && (fname.contains(file_ext) || fname.ends_with(".gz")) {
-                    let mtime = entry.metadata().and_then(|m| m.modified()).unwrap_or(UNIX_EPOCH);
+                if fname.starts_with(&prefix)
+                    && (fname.contains(file_ext) || fname.ends_with(".gz"))
+                {
+                    let mtime = entry
+                        .metadata()
+                        .and_then(|m| m.modified())
+                        .unwrap_or(UNIX_EPOCH);
                     matching_files.push((path, mtime));
                 }
             }
@@ -636,13 +689,19 @@ fn build_writer(val: Option<&serde_json::Value>) -> Arc<dyn LogWriter> {
         return Arc::new(StdoutWriter);
     };
 
-    let output_type = val.get("output").and_then(|v| v.as_str()).unwrap_or("stdout");
+    let output_type = val
+        .get("output")
+        .and_then(|v| v.as_str())
+        .unwrap_or("stdout");
 
     match output_type {
         "stderr" => Arc::new(StderrWriter),
         "discard" => Arc::new(DiscardWriter),
         "file" => {
-            let filename = val.get("filename").and_then(|v| v.as_str()).unwrap_or("access.log");
+            let filename = val
+                .get("filename")
+                .and_then(|v| v.as_str())
+                .unwrap_or("access.log");
             let mut options = FileRollOptions::default();
 
             if let Some(disabled) = val.get("roll_disabled").and_then(|v| v.as_bool()) {
@@ -681,14 +740,24 @@ fn build_writer(val: Option<&serde_json::Value>) -> Arc<dyn LogWriter> {
             match FileWriter::new(filename, options) {
                 Ok(w) => Arc::new(w),
                 Err(e) => {
-                    tracing::error!("Failed to open log file '{}': {}. Defaulting to stderr.", filename, e);
+                    tracing::error!(
+                        "Failed to open log file '{}': {}. Defaulting to stderr.",
+                        filename,
+                        e
+                    );
                     Arc::new(StderrWriter)
                 }
             }
         }
         "net" => {
-            let addr = val.get("address").and_then(|v| v.as_str()).unwrap_or("127.0.0.1:9000");
-            let soft = val.get("soft_start").and_then(|v| v.as_bool()).unwrap_or(false);
+            let addr = val
+                .get("address")
+                .and_then(|v| v.as_str())
+                .unwrap_or("127.0.0.1:9000");
+            let soft = val
+                .get("soft_start")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
             Arc::new(NetWriter::new(addr.to_string(), soft))
         }
         _ => Arc::new(StdoutWriter),
@@ -712,7 +781,10 @@ pub enum FilterAction {
     Replace(String),
     Hash,
     Regexp(Regex, String),
-    IpMask { ipv4: u8, ipv6: u8 },
+    IpMask {
+        ipv4: u8,
+        ipv6: u8,
+    },
     Query {
         delete: Vec<String>,
         replace: HashMap<String, String>,
@@ -773,7 +845,11 @@ impl LogEncoder {
                     level_format = "color".to_string();
                 }
                 "filter" => {
-                    if let Some(wrap) = val.get("wrap").and_then(|v| v.get("format")).and_then(|v| v.as_str()) {
+                    if let Some(wrap) = val
+                        .get("wrap")
+                        .and_then(|v| v.get("format"))
+                        .and_then(|v| v.as_str())
+                    {
                         if wrap == "console" {
                             encoder_type = EncoderType::Console;
                         }
@@ -787,7 +863,11 @@ impl LogEncoder {
                     }
                 }
                 "append" => {
-                    if let Some(wrap) = val.get("wrap").and_then(|v| v.get("format")).and_then(|v| v.as_str()) {
+                    if let Some(wrap) = val
+                        .get("wrap")
+                        .and_then(|v| v.get("format"))
+                        .and_then(|v| v.as_str())
+                    {
                         if wrap == "console" {
                             encoder_type = EncoderType::Console;
                         }
@@ -867,7 +947,10 @@ impl LogEncoder {
         let formatted_ts = format_timestamp(raw_ts, &self.time_format, self.time_local);
 
         // 4. Apply duration formatting
-        let raw_dur = entry.get("duration").and_then(|v| v.as_f64()).unwrap_or(0.0);
+        let raw_dur = entry
+            .get("duration")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.0);
         let formatted_dur = format_duration(raw_dur, &self.duration_format);
 
         // 5. Apply level formatting
@@ -883,7 +966,10 @@ impl LogEncoder {
                     map.insert(self.time_key.clone(), formatted_ts);
 
                     if self.duration_format == "string" {
-                        map.insert("duration".to_string(), serde_json::Value::String(formatted_dur));
+                        map.insert(
+                            "duration".to_string(),
+                            serde_json::Value::String(formatted_dur),
+                        );
                     } else if let Ok(num) = formatted_dur.parse::<f64>() {
                         map.insert("duration".to_string(), serde_json::json!(num));
                     }
@@ -891,7 +977,10 @@ impl LogEncoder {
                     if self.level_key != "level" {
                         map.remove("level");
                     }
-                    map.insert(self.level_key.clone(), serde_json::Value::String(formatted_level));
+                    map.insert(
+                        self.level_key.clone(),
+                        serde_json::Value::String(formatted_level),
+                    );
 
                     if self.message_key != "msg" {
                         if let Some(msg) = map.remove("msg") {
@@ -913,13 +1002,29 @@ impl LogEncoder {
                     other => other.to_string(),
                 };
                 let status = entry.get("status").and_then(|v| v.as_u64()).unwrap_or(200);
-                let method = entry.get("request").and_then(|r| r.get("method")).and_then(|v| v.as_str()).unwrap_or("");
-                let uri = entry.get("request").and_then(|r| r.get("uri")).and_then(|v| v.as_str()).unwrap_or("");
+                let method = entry
+                    .get("request")
+                    .and_then(|r| r.get("method"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                let uri = entry
+                    .get("request")
+                    .and_then(|r| r.get("uri"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
                 let size = entry.get("size").and_then(|v| v.as_u64()).unwrap_or(0);
 
                 format!(
                     "{}  {}\t{}\t{}\t{} {} -> {} ({}B, {})",
-                    ts, formatted_level, logger_name, "handled request", method, uri, status, size, formatted_dur
+                    ts,
+                    formatted_level,
+                    logger_name,
+                    "handled request",
+                    method,
+                    uri,
+                    status,
+                    size,
+                    formatted_dur
                 )
             }
         }
@@ -934,17 +1039,29 @@ fn parse_filter_rule(val: &serde_json::Value) -> Option<FilterRule> {
     let action = match ftype {
         "delete" => FilterAction::Delete,
         "rename" => {
-            let key = val.get("key").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let key = val
+                .get("key")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
             FilterAction::Rename(key)
         }
         "replace" => {
-            let rep = val.get("replacement").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let rep = val
+                .get("replacement")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
             FilterAction::Replace(rep)
         }
         "hash" => FilterAction::Hash,
         "regexp" => {
             let pat = val.get("pattern").and_then(|v| v.as_str()).unwrap_or("");
-            let rep = val.get("replacement").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let rep = val
+                .get("replacement")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
             let regex = Regex::new(pat).ok()?;
             FilterAction::Regexp(regex, rep)
         }
@@ -961,11 +1078,19 @@ fn parse_filter_rule(val: &serde_json::Value) -> Option<FilterRule> {
             if let Some(actions) = val.get("actions").and_then(|v| v.as_array()) {
                 for a in actions {
                     let act_type = a.get("type").and_then(|v| v.as_str()).unwrap_or("");
-                    let key = a.get("key").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    let key = a
+                        .get("key")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
                     match act_type {
                         "delete" => delete.push(key),
                         "replace" => {
-                            let val_str = a.get("value").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                            let val_str = a
+                                .get("value")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string();
                             replace.insert(key, val_str);
                         }
                         "hash" => hash.push(key),
@@ -973,7 +1098,11 @@ fn parse_filter_rule(val: &serde_json::Value) -> Option<FilterRule> {
                     }
                 }
             }
-            FilterAction::Query { delete, replace, hash }
+            FilterAction::Query {
+                delete,
+                replace,
+                hash,
+            }
         }
         "cookie" => {
             let mut delete = Vec::new();
@@ -983,11 +1112,19 @@ fn parse_filter_rule(val: &serde_json::Value) -> Option<FilterRule> {
             if let Some(actions) = val.get("actions").and_then(|v| v.as_array()) {
                 for a in actions {
                     let act_type = a.get("type").and_then(|v| v.as_str()).unwrap_or("");
-                    let name = a.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    let name = a
+                        .get("name")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
                     match act_type {
                         "delete" => delete.push(name),
                         "replace" => {
-                            let val_str = a.get("value").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                            let val_str = a
+                                .get("value")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string();
                             replace.insert(name, val_str);
                         }
                         "hash" => hash.push(name),
@@ -995,7 +1132,11 @@ fn parse_filter_rule(val: &serde_json::Value) -> Option<FilterRule> {
                     }
                 }
             }
-            FilterAction::Cookie { delete, replace, hash }
+            FilterAction::Cookie {
+                delete,
+                replace,
+                hash,
+            }
         }
         "set_cookie" => {
             let mut delete = Vec::new();
@@ -1005,11 +1146,19 @@ fn parse_filter_rule(val: &serde_json::Value) -> Option<FilterRule> {
             if let Some(actions) = val.get("actions").and_then(|v| v.as_array()) {
                 for a in actions {
                     let act_type = a.get("type").and_then(|v| v.as_str()).unwrap_or("");
-                    let name = a.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    let name = a
+                        .get("name")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
                     match act_type {
                         "delete" => delete.push(name),
                         "replace" => {
-                            let val_str = a.get("value").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                            let val_str = a
+                                .get("value")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string();
                             replace.insert(name, val_str);
                         }
                         "hash" => hash.push(name),
@@ -1017,7 +1166,11 @@ fn parse_filter_rule(val: &serde_json::Value) -> Option<FilterRule> {
                     }
                 }
             }
-            FilterAction::SetCookie { delete, replace, hash }
+            FilterAction::SetCookie {
+                delete,
+                replace,
+                hash,
+            }
         }
         _ => return None,
     };
@@ -1073,21 +1226,33 @@ pub fn apply_filter(target: &mut serde_json::Value, path: &[String], action: &Fi
                     }
                 }
             }
-            FilterAction::Query { delete, replace, hash } => {
+            FilterAction::Query {
+                delete,
+                replace,
+                hash,
+            } => {
                 if let serde_json::Value::Object(map) = target {
                     if let Some(val) = map.get_mut(key) {
                         transform_value_query(val, delete, replace, hash);
                     }
                 }
             }
-            FilterAction::Cookie { delete, replace, hash } => {
+            FilterAction::Cookie {
+                delete,
+                replace,
+                hash,
+            } => {
                 if let serde_json::Value::Object(map) = target {
                     if let Some(val) = map.get_mut(key) {
                         transform_value_cookie(val, delete, replace, hash);
                     }
                 }
             }
-            FilterAction::SetCookie { delete, replace, hash } => {
+            FilterAction::SetCookie {
+                delete,
+                replace,
+                hash,
+            } => {
                 if let serde_json::Value::Object(map) = target {
                     if let Some(val) = map.get_mut(key) {
                         transform_value_set_cookie(val, delete, replace, hash);
@@ -1188,7 +1353,11 @@ pub fn mask_ip_string(s: &str, ipv4_cidr: u8, ipv6_cidr: u8) -> String {
                 (trimmed, None)
             }
         } else if let Some((h, p)) = trimmed.split_once(':') {
-            if !p.contains(':') && !h.is_empty() && !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()) {
+            if !p.contains(':')
+                && !h.is_empty()
+                && !p.is_empty()
+                && p.chars().all(|c| c.is_ascii_digit())
+            {
                 (h, Some(p))
             } else {
                 (trimmed, None)
@@ -1266,9 +1435,12 @@ pub fn process_query_string(
     replace: &HashMap<String, String>,
     hash: &[String],
 ) -> String {
-    let Some((path, query)) = s.split_once('?') else { return s.to_string() };
+    let Some((path, query)) = s.split_once('?') else {
+        return s.to_string();
+    };
 
-    let mut map: std::collections::BTreeMap<String, Vec<String>> = std::collections::BTreeMap::new();
+    let mut map: std::collections::BTreeMap<String, Vec<String>> =
+        std::collections::BTreeMap::new();
     for pair in query.split('&') {
         if pair.is_empty() {
             continue;
@@ -1371,7 +1543,8 @@ pub fn filter_set_cookie_line(
 
     let raw_val = &head[eq + 1..];
     let trimmed_val = raw_val.trim();
-    let is_quoted = trimmed_val.len() >= 2 && trimmed_val.starts_with('"') && trimmed_val.ends_with('"');
+    let is_quoted =
+        trimmed_val.len() >= 2 && trimmed_val.starts_with('"') && trimmed_val.ends_with('"');
     let inner_val = if is_quoted {
         &trimmed_val[1..trimmed_val.len() - 1]
     } else {

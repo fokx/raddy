@@ -1,19 +1,19 @@
-use std::collections::HashMap;
-use std::net::IpAddr;
-use std::sync::Arc;
+use crate::error::{Result, TlsError};
+use crate::sni::SniResolver;
+use crate::storage::CertStorage;
 use instant_acme::{
     Account, AccountCredentials, ChallengeType, Identifier, NewAccount, NewOrder, OrderStatus,
     RetryPolicy,
 };
 use parking_lot::RwLock;
 use rcgen::{CertificateParams, CustomExtension, KeyPair, PKCS_ECDSA_P256_SHA256, SanType};
-use ring::digest::{digest, SHA256};
-use crate::error::{Result, TlsError};
-use crate::sni::SniResolver;
-use crate::storage::CertStorage;
+use ring::digest::{SHA256, digest};
+use std::collections::HashMap;
+use std::net::IpAddr;
+use std::sync::Arc;
 
 pub use raddy_core::config::{
-    resolve_acme_ca, LETS_ENCRYPT_PRODUCTION, LETS_ENCRYPT_STAGING, ZEROSSL_PRODUCTION,
+    LETS_ENCRYPT_PRODUCTION, LETS_ENCRYPT_STAGING, ZEROSSL_PRODUCTION, resolve_acme_ca,
 };
 
 /// In-memory storage for active HTTP-01 challenge authorizations.
@@ -29,7 +29,9 @@ impl Http01ChallengeStore {
     }
 
     pub fn insert(&self, token: impl Into<String>, key_auth: impl Into<String>) {
-        self.challenges.write().insert(token.into(), key_auth.into());
+        self.challenges
+            .write()
+            .insert(token.into(), key_auth.into());
     }
 
     pub fn get(&self, token: &str) -> Option<String> {
@@ -109,12 +111,11 @@ impl AcmeClient {
 
     /// Orders and issues a certificate from ACME CA for given domain names and/or IP addresses.
     /// Supports short-lived public IP certificates (RFC 8738) via Identifier::Ip!
-    pub async fn issue_certificate(
-        &self,
-        identifiers_str: &[String],
-    ) -> Result<(String, String)> {
+    pub async fn issue_certificate(&self, identifiers_str: &[String]) -> Result<(String, String)> {
         if identifiers_str.is_empty() {
-            return Err(TlsError::Acme("No identifiers provided for ACME order".into()));
+            return Err(TlsError::Acme(
+                "No identifiers provided for ACME order".into(),
+            ));
         }
 
         // 1. Build ACME Identifiers: distinguish DNS names from IP addresses (RFC 8738)
@@ -223,7 +224,10 @@ impl AcmeClient {
                         {
                             tracing::warn!("Failed to persist ACME account credentials: {}", e);
                         } else {
-                            tracing::info!("Persisted ACME account credentials for '{}'", account_id);
+                            tracing::info!(
+                                "Persisted ACME account credentials for '{}'",
+                                account_id
+                            );
                         }
                     }
                     Err(e) => {
@@ -237,8 +241,12 @@ impl AcmeClient {
 
         // 3. Determine ACME challenge strategy sequence
         let methods_to_try = match self.challenge_preference {
-            ChallengeTypePreference::TlsAlpnFirst => vec![ChallengeType::TlsAlpn01, ChallengeType::Http01],
-            ChallengeTypePreference::Http01First => vec![ChallengeType::Http01, ChallengeType::TlsAlpn01],
+            ChallengeTypePreference::TlsAlpnFirst => {
+                vec![ChallengeType::TlsAlpn01, ChallengeType::Http01]
+            }
+            ChallengeTypePreference::Http01First => {
+                vec![ChallengeType::Http01, ChallengeType::TlsAlpn01]
+            }
             ChallengeTypePreference::TlsAlpnOnly => vec![ChallengeType::TlsAlpn01],
             ChallengeTypePreference::Http01Only => vec![ChallengeType::Http01],
         };
@@ -256,7 +264,10 @@ impl AcmeClient {
                 num_methods
             );
 
-            let mut order = match account.new_order(&NewOrder::new(identifiers.as_slice())).await {
+            let mut order = match account
+                .new_order(&NewOrder::new(identifiers.as_slice()))
+                .await
+            {
                 Ok(ord) => ord,
                 Err(e) => {
                     let err_msg = format!("Failed to create ACME order: {}", e);
@@ -288,13 +299,23 @@ impl AcmeClient {
                     continue;
                 }
 
-                let has_tls_alpn = authz.challenges.iter().any(|c| c.r#type == ChallengeType::TlsAlpn01);
-                let has_http01 = authz.challenges.iter().any(|c| c.r#type == ChallengeType::Http01);
+                let has_tls_alpn = authz
+                    .challenges
+                    .iter()
+                    .any(|c| c.r#type == ChallengeType::TlsAlpn01);
+                let has_http01 = authz
+                    .challenges
+                    .iter()
+                    .any(|c| c.r#type == ChallengeType::Http01);
 
                 tracing::debug!(
                     "Authorization challenges offered for '{}': {:?}",
                     id_str,
-                    authz.challenges.iter().map(|c| c.r#type.clone()).collect::<Vec<_>>()
+                    authz
+                        .challenges
+                        .iter()
+                        .map(|c| c.r#type.clone())
+                        .collect::<Vec<_>>()
                 );
 
                 // Determine which challenge solver to use for this authorization
@@ -328,7 +349,10 @@ impl AcmeClient {
                     let mut alpn_challenge = match authz.challenge(ChallengeType::TlsAlpn01) {
                         Some(c) => c,
                         None => {
-                            auth_error = Some(format!("TLS-ALPN-01 challenge handle missing for '{}'", id_str));
+                            auth_error = Some(format!(
+                                "TLS-ALPN-01 challenge handle missing for '{}'",
+                                id_str
+                            ));
                             break;
                         }
                     };
@@ -345,7 +369,9 @@ impl AcmeClient {
                     params.custom_extensions.push(ext);
 
                     params.distinguished_name = rcgen::DistinguishedName::new();
-                    params.distinguished_name.push(rcgen::DnType::CommonName, id_str.as_str());
+                    params
+                        .distinguished_name
+                        .push(rcgen::DnType::CommonName, id_str.as_str());
 
                     if let Ok(ip) = id_str.parse::<IpAddr>() {
                         params.subject_alt_names.push(SanType::IpAddress(ip));
@@ -353,7 +379,10 @@ impl AcmeClient {
                         let dns_name = match rcgen::Ia5String::try_from(id_str.clone()) {
                             Ok(n) => n,
                             Err(e) => {
-                                auth_error = Some(format!("Invalid DNS name '{}' for TLS-ALPN-01: {:?}", id_str, e));
+                                auth_error = Some(format!(
+                                    "Invalid DNS name '{}' for TLS-ALPN-01: {:?}",
+                                    id_str, e
+                                ));
                                 break;
                             }
                         };
@@ -363,39 +392,57 @@ impl AcmeClient {
                     let leaf_key = match KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256) {
                         Ok(k) => k,
                         Err(e) => {
-                            auth_error = Some(format!("Failed to generate ECDSA key for TLS-ALPN-01: {}", e));
+                            auth_error = Some(format!(
+                                "Failed to generate ECDSA key for TLS-ALPN-01: {}",
+                                e
+                            ));
                             break;
                         }
                     };
                     let leaf_cert = match params.self_signed(&leaf_key) {
                         Ok(c) => c,
                         Err(e) => {
-                            auth_error = Some(format!("Failed to generate self-signed cert for TLS-ALPN-01: {}", e));
+                            auth_error = Some(format!(
+                                "Failed to generate self-signed cert for TLS-ALPN-01: {}",
+                                e
+                            ));
                             break;
                         }
                     };
-                    let certified_key = match crate::storage::parse_certified_key(&leaf_cert.pem(), &leaf_key.serialize_pem()) {
+                    let certified_key = match crate::storage::parse_certified_key(
+                        &leaf_cert.pem(),
+                        &leaf_key.serialize_pem(),
+                    ) {
                         Ok(k) => k,
                         Err(e) => {
-                            auth_error = Some(format!("Failed to parse certified key for TLS-ALPN-01: {}", e));
+                            auth_error = Some(format!(
+                                "Failed to parse certified key for TLS-ALPN-01: {}",
+                                e
+                            ));
                             break;
                         }
                     };
 
-                    self.sni_resolver.insert_alpn_challenge(&id_str, certified_key);
+                    self.sni_resolver
+                        .insert_alpn_challenge(&id_str, certified_key);
                     active_alpn_ids.push(id_str.clone());
 
-                    tracing::info!("Solving ACME challenge for '{}' using TLS-ALPN-01 (direct over port 443)...", id_str);
+                    tracing::info!(
+                        "Solving ACME challenge for '{}' using TLS-ALPN-01 (direct over port 443)...",
+                        id_str
+                    );
 
                     if let Err(e) = alpn_challenge.set_ready().await {
-                        auth_error = Some(format!("Failed to set TLS-ALPN-01 challenge ready: {}", e));
+                        auth_error =
+                            Some(format!("Failed to set TLS-ALPN-01 challenge ready: {}", e));
                         break;
                     }
                 } else {
                     let mut http_challenge = match authz.challenge(ChallengeType::Http01) {
                         Some(c) => c,
                         None => {
-                            auth_error = Some(format!("HTTP-01 challenge handle missing for '{}'", id_str));
+                            auth_error =
+                                Some(format!("HTTP-01 challenge handle missing for '{}'", id_str));
                             break;
                         }
                     };
@@ -428,7 +475,10 @@ impl AcmeClient {
                 }
 
                 if !is_last_attempt {
-                    tracing::warn!("ACME authorization setup error: {}. Retrying with fallback challenge...", err);
+                    tracing::warn!(
+                        "ACME authorization setup error: {}. Retrying with fallback challenge...",
+                        err
+                    );
                     last_error = Some(err);
                     continue;
                 } else {
@@ -471,7 +521,8 @@ impl AcmeClient {
                         let id_val = authz.identifier().to_string();
                         for ch in &authz.challenges {
                             if let Some(ref problem) = ch.error {
-                                let detail = problem.detail.as_deref().unwrap_or("no detail provided");
+                                let detail =
+                                    problem.detail.as_deref().unwrap_or("no detail provided");
                                 let prob_type = problem.r#type.as_deref().unwrap_or("unknown");
                                 failure_reasons.push(format!(
                                     "Identifier '{}' challenge {:?}: {} (error type: {}, status: {:?})",
@@ -529,8 +580,8 @@ impl AcmeClient {
             return Ok((cert_chain_pem, private_key_pem));
         }
 
-        Err(TlsError::Acme(
-            last_error.unwrap_or_else(|| "All ACME challenge attempts failed".to_string()),
-        ))
+        Err(TlsError::Acme(last_error.unwrap_or_else(|| {
+            "All ACME challenge attempts failed".to_string()
+        })))
     }
 }

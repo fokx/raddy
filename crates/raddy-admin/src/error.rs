@@ -31,8 +31,14 @@ impl IntoResponse for AdminError {
             AdminError::NotFound(m) => (StatusCode::NOT_FOUND, m.clone()),
             AdminError::BadRequest(m) => (StatusCode::BAD_REQUEST, m.clone()),
             AdminError::Internal(m) => (StatusCode::INTERNAL_SERVER_ERROR, m.clone()),
-            AdminError::Core(e) => (StatusCode::BAD_REQUEST, format!("Configuration error: {}", e)),
-            AdminError::HttpServer(e) => (StatusCode::BAD_REQUEST, format!("Server configuration error: {}", e)),
+            AdminError::Core(e) => (
+                StatusCode::BAD_REQUEST,
+                format!("Configuration error: {}", e),
+            ),
+            AdminError::HttpServer(e) => (
+                StatusCode::BAD_REQUEST,
+                format!("Server configuration error: {}", e),
+            ),
             AdminError::Json(e) => (StatusCode::BAD_REQUEST, format!("Invalid JSON: {}", e)),
         };
 

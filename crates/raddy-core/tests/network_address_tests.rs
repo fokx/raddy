@@ -1,6 +1,6 @@
 use raddy_core::{
-    join_network_address, parse_network_address, parse_network_address_with_defaults,
-    split_network_address, NetworkAddress,
+    NetworkAddress, join_network_address, parse_network_address,
+    parse_network_address_with_defaults, split_network_address,
 };
 
 #[test]
@@ -27,11 +27,29 @@ fn test_split_network_address() {
         if should_err {
             assert!(res.is_err(), "Test {}: Expected error for '{}'", i, input);
         } else {
-            assert!(res.is_ok(), "Test {}: Unexpected error for '{}': {:?}", i, input, res.err());
+            assert!(
+                res.is_ok(),
+                "Test {}: Unexpected error for '{}': {:?}",
+                i,
+                input,
+                res.err()
+            );
             let (act_net, act_host, act_port) = res.unwrap();
-            assert_eq!(act_net, exp_net, "Test {}: network mismatch for '{}'", i, input);
-            assert_eq!(act_host, exp_host, "Test {}: host mismatch for '{}'", i, input);
-            assert_eq!(act_port, exp_port, "Test {}: port mismatch for '{}'", i, input);
+            assert_eq!(
+                act_net, exp_net,
+                "Test {}: network mismatch for '{}'",
+                i, input
+            );
+            assert_eq!(
+                act_host, exp_host,
+                "Test {}: host mismatch for '{}'",
+                i, input
+            );
+            assert_eq!(
+                act_port, exp_port,
+                "Test {}: port mismatch for '{}'",
+                i, input
+            );
         }
     }
 }
@@ -55,7 +73,11 @@ fn test_join_network_address() {
 
     for (i, (netw, host, port, expect)) in cases.into_iter().enumerate() {
         let actual = join_network_address(netw, host, port);
-        assert_eq!(actual, expect, "Test {}: expected '{}', got '{}'", i, expect, actual);
+        assert_eq!(
+            actual, expect,
+            "Test {}: expected '{}', got '{}'",
+            i, expect, actual
+        );
     }
 }
 
@@ -170,7 +192,13 @@ fn test_parse_network_address() {
             },
             false,
         ),
-        ("localhost:1-999999999999", "tcp", 0, NetworkAddress::default(), true),
+        (
+            "localhost:1-999999999999",
+            "tcp",
+            0,
+            NetworkAddress::default(),
+            true,
+        ),
     ];
 
     for (i, (input, def_net, def_port, exp_addr, should_err)) in cases.into_iter().enumerate() {
@@ -178,9 +206,19 @@ fn test_parse_network_address() {
         if should_err {
             assert!(res.is_err(), "Test {}: Expected error for '{}'", i, input);
         } else {
-            assert!(res.is_ok(), "Test {}: Unexpected error for '{}': {:?}", i, input, res.err());
+            assert!(
+                res.is_ok(),
+                "Test {}: Unexpected error for '{}': {:?}",
+                i,
+                input,
+                res.err()
+            );
             let actual = res.unwrap();
-            assert_eq!(actual, exp_addr, "Test {}: addr mismatch for '{}'", i, input);
+            assert_eq!(
+                actual, exp_addr,
+                "Test {}: addr mismatch for '{}'",
+                i, input
+            );
         }
     }
 }

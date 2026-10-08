@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use async_trait::async_trait;
 use base64::prelude::*;
 use http::header::{AUTHORIZATION, WWW_AUTHENTICATE};
@@ -6,6 +5,7 @@ use http::{HeaderName, HeaderValue, StatusCode};
 use raddy_core::context::Context;
 use raddy_core::error::Result;
 use raddy_core::handler::Handler;
+use std::collections::HashMap;
 
 /// HTTP Basic Authentication handler.
 pub struct BasicAuthHandler {
@@ -41,7 +41,10 @@ impl BasicAuthHandler {
         };
 
         if let Some(expected) = self.users.get(username) {
-            if expected.starts_with("$2a$") || expected.starts_with("$2b$") || expected.starts_with("$2y$") {
+            if expected.starts_with("$2a$")
+                || expected.starts_with("$2b$")
+                || expected.starts_with("$2y$")
+            {
                 bcrypt::verify(password, expected).unwrap_or(false)
             } else {
                 expected == password
@@ -55,10 +58,7 @@ impl BasicAuthHandler {
 #[async_trait]
 impl Handler for BasicAuthHandler {
     async fn handle(&self, ctx: &mut Context) -> Result<()> {
-        let auth_val = ctx
-            .headers
-            .get(AUTHORIZATION)
-            .and_then(|v| v.to_str().ok());
+        let auth_val = ctx.headers.get(AUTHORIZATION).and_then(|v| v.to_str().ok());
 
         let authenticated = match auth_val {
             Some(h) => self.verify_credentials(h),
@@ -85,7 +85,11 @@ pub struct ForwardAuthHandler {
 }
 
 impl ForwardAuthHandler {
-    pub fn new(upstream: impl Into<String>, uri_override: Option<String>, copy_headers: Vec<String>) -> Self {
+    pub fn new(
+        upstream: impl Into<String>,
+        uri_override: Option<String>,
+        copy_headers: Vec<String>,
+    ) -> Self {
         Self {
             upstream: upstream.into(),
             uri_override,
@@ -126,7 +130,9 @@ impl Handler for ForwardAuthHandler {
                     Ok(())
                 } else {
                     // Forward rejection status and headers downstream
-                    ctx.status = Some(StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::UNAUTHORIZED));
+                    ctx.status = Some(
+                        StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::UNAUTHORIZED),
+                    );
                     for (k, v) in resp.headers() {
                         if let Ok(hdr) = HeaderName::from_bytes(k.as_str().as_bytes()) {
                             ctx.response_headers.insert(hdr, v.clone());
@@ -140,7 +146,10 @@ impl Handler for ForwardAuthHandler {
             }
             Err(e) => {
                 tracing::error!("Forward auth error querying '{}': {}", auth_url, e);
-                ctx.set_response(StatusCode::BAD_GATEWAY, format!("502 Bad Gateway: Forward auth failed: {}\n", e));
+                ctx.set_response(
+                    StatusCode::BAD_GATEWAY,
+                    format!("502 Bad Gateway: Forward auth failed: {}\n", e),
+                );
                 Ok(())
             }
         }

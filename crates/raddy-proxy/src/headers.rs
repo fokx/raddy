@@ -1,7 +1,7 @@
-use std::collections::HashMap;
 use http::{HeaderMap, HeaderName, HeaderValue};
 use raddy_core::context::Context;
-use raddy_core::placeholder::{eval_placeholders, PlaceholderProvider};
+use raddy_core::placeholder::{PlaceholderProvider, eval_placeholders};
+use std::collections::HashMap;
 
 /// Rules for mutating request headers before sending upstream (`header_up`)
 /// and mutating response headers before sending to client (`header_down`).
@@ -28,7 +28,11 @@ impl HeaderMutator {
         }
 
         // 2. Auto proxy headers (if not already set or deleted)
-        if !self.header_up_delete.iter().any(|d| d.eq_ignore_ascii_case("X-Forwarded-For")) {
+        if !self
+            .header_up_delete
+            .iter()
+            .any(|d| d.eq_ignore_ascii_case("X-Forwarded-For"))
+        {
             if let Some(client_ip) = ctx.remote_addr.map(|a| a.ip().to_string()) {
                 let existing = headers
                     .get("X-Forwarded-For")
@@ -42,15 +46,27 @@ impl HeaderMutator {
             }
         }
 
-        if !self.header_up_delete.iter().any(|d| d.eq_ignore_ascii_case("X-Forwarded-Proto")) {
-            let scheme = if ctx.tls_server_name.is_some() { "https" } else { "http" };
+        if !self
+            .header_up_delete
+            .iter()
+            .any(|d| d.eq_ignore_ascii_case("X-Forwarded-Proto"))
+        {
+            let scheme = if ctx.tls_server_name.is_some() {
+                "https"
+            } else {
+                "http"
+            };
             headers.insert(
                 HeaderName::from_static("x-forwarded-proto"),
                 HeaderValue::from_static(scheme),
             );
         }
 
-        if !self.header_up_delete.iter().any(|d| d.eq_ignore_ascii_case("X-Forwarded-Host")) {
+        if !self
+            .header_up_delete
+            .iter()
+            .any(|d| d.eq_ignore_ascii_case("X-Forwarded-Host"))
+        {
             let host_val = headers.get(http::header::HOST).cloned().or_else(|| {
                 ctx.get_placeholder("hostport")
                     .or_else(|| ctx.get_placeholder("host"))
@@ -106,7 +122,10 @@ impl HeaderMutator {
 /// Strips hop-by-hop headers from an upstream response, preserving Upgrade on 101.
 pub fn strip_hop_by_hop_headers(headers: &mut HeaderMap, is_101: bool) {
     let mut to_remove = Vec::new();
-    if let Some(conn_val) = headers.get(http::header::CONNECTION).and_then(|v| v.to_str().ok()) {
+    if let Some(conn_val) = headers
+        .get(http::header::CONNECTION)
+        .and_then(|v| v.to_str().ok())
+    {
         for part in conn_val.split(',') {
             let trimmed = part.trim();
             if !trimmed.is_empty() && !trimmed.eq_ignore_ascii_case("upgrade") {
@@ -139,6 +158,9 @@ pub fn strip_hop_by_hop_headers(headers: &mut HeaderMap, is_101: bool) {
         headers.remove(http::header::CONNECTION);
         headers.remove(http::header::UPGRADE);
     } else {
-        headers.insert(http::header::CONNECTION, HeaderValue::from_static("Upgrade"));
+        headers.insert(
+            http::header::CONNECTION,
+            HeaderValue::from_static("Upgrade"),
+        );
     }
 }

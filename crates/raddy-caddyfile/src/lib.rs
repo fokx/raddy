@@ -14,7 +14,7 @@ pub mod parser;
 pub mod preprocessor;
 
 pub use adapter::Adapter;
-pub use address::{parse_address, Address};
+pub use address::{Address, parse_address};
 pub use ast::Caddyfile;
 pub use dispenser::Dispenser;
 pub use error::{ParseError, ParseResult};
@@ -23,8 +23,8 @@ pub use lexer::{Lexer, Span, Token, TokenKind};
 pub use parser::Parser;
 pub use preprocessor::Preprocessor;
 
-use std::path::Path;
 use raddy_core::config::Config;
+use std::path::Path;
 
 /// Parses a Caddyfile string into an AST without preprocessor expansion or adaptation.
 pub fn parse_caddyfile(input: &str) -> ParseResult<Caddyfile> {
@@ -47,11 +47,13 @@ pub fn adapt_caddyfile(input: &str, base_dir: impl AsRef<Path>) -> ParseResult<C
 /// Reads a Caddyfile from disk, runs preprocessor expansion, and adapts it into a Raddy internal `Config`.
 pub fn adapt_caddyfile_from_file(path: impl AsRef<Path>) -> ParseResult<Config> {
     let path_ref = path.as_ref();
-    let content = std::fs::read_to_string(path_ref).map_err(|e| ParseError::Import(format!(
-        "Failed to read Caddyfile at '{}': {}",
-        path_ref.display(),
-        e
-    )))?;
+    let content = std::fs::read_to_string(path_ref).map_err(|e| {
+        ParseError::Import(format!(
+            "Failed to read Caddyfile at '{}': {}",
+            path_ref.display(),
+            e
+        ))
+    })?;
 
     let base_dir = path_ref.parent().unwrap_or_else(|| Path::new("."));
     adapt_caddyfile(&content, base_dir)

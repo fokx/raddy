@@ -59,7 +59,10 @@ fn test_cli_list_modules() {
         serde_json::from_slice(&output_json.stdout).expect("Failed to parse JSON module list");
     assert!(val.is_array());
     let list = val.as_array().unwrap();
-    assert!(list.iter().any(|m| m["name"] == "http.handlers.reverse_proxy"));
+    assert!(
+        list.iter()
+            .any(|m| m["name"] == "http.handlers.reverse_proxy")
+    );
 }
 
 #[test]
@@ -228,8 +231,14 @@ async fn test_cli_run_reload_and_stop() {
         .expect("Failed to run raddy reload");
 
     if !reload_output.status.success() {
-        eprintln!("reload stdout: {}", String::from_utf8_lossy(&reload_output.stdout));
-        eprintln!("reload stderr: {}", String::from_utf8_lossy(&reload_output.stderr));
+        eprintln!(
+            "reload stdout: {}",
+            String::from_utf8_lossy(&reload_output.stdout)
+        );
+        eprintln!(
+            "reload stderr: {}",
+            String::from_utf8_lossy(&reload_output.stderr)
+        );
     }
     assert!(reload_output.status.success());
 
@@ -295,14 +304,21 @@ async fn test_cli_file_server() {
     assert!(ready, "File server failed to start within 4s");
 
     // 1. Get hello.txt
-    let resp = client.get(format!("{}/hello.txt", base_url)).send().await.unwrap();
+    let resp = client
+        .get(format!("{}/hello.txt", base_url))
+        .send()
+        .await
+        .unwrap();
     assert_eq!(resp.status(), reqwest::StatusCode::OK);
     assert_eq!(resp.text().await.unwrap(), "Static File Content");
 
     // 2. Get / (index.html)
     let resp_index = client.get(&base_url).send().await.unwrap();
     assert_eq!(resp_index.status(), reqwest::StatusCode::OK);
-    assert_eq!(resp_index.text().await.unwrap(), "Hello from Raddy File Server!");
+    assert_eq!(
+        resp_index.text().await.unwrap(),
+        "Hello from Raddy File Server!"
+    );
 
     // Terminate child
     let _ = child.kill();

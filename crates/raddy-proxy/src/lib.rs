@@ -17,11 +17,11 @@ pub use forward::{
     AclDecision, AclRule, AclRuleConfig, AuthConfig, AuthError, ForwardProxyConfig,
     ForwardProxyHandler, ProbeResistanceConfig, UpstreamProxy,
 };
-pub use headers::{strip_hop_by_hop_headers, HeaderMutator};
+pub use headers::{HeaderMutator, strip_hop_by_hop_headers};
 pub use health::{ActiveHealthConfig, PassiveHealthConfig};
 pub use load_balancer::{
-    parse_load_balancer, First, IpHash, LeastConn, LoadBalancer, Random, RoundRobin, UriHash,
-    WeightedRoundRobin,
+    First, IpHash, LeastConn, LoadBalancer, Random, RoundRobin, UriHash, WeightedRoundRobin,
+    parse_load_balancer,
 };
 pub use proxy::ReverseProxyHandler;
 pub use transport::HttpTransport;
@@ -31,13 +31,20 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 /// Builds a `ReverseProxyHandler` from a JSON configuration value (matching Caddy's reverse_proxy schema).
-pub fn build_reverse_proxy_from_config(details: &HashMap<String, serde_json::Value>) -> raddy_core::error::Result<ReverseProxyHandler> {
+pub fn build_reverse_proxy_from_config(
+    details: &HashMap<String, serde_json::Value>,
+) -> raddy_core::error::Result<ReverseProxyHandler> {
     // 1. Parse upstreams
     let mut upstreams = Vec::new();
+    let mut any_upstream_tls = false;
     if let Some(arr) = details.get("upstreams").and_then(|v| v.as_array()) {
         for item in arr {
             if let Some(dial) = item.get("dial").and_then(|d| d.as_str()) {
-                upstreams.push(Arc::new(Upstream::new(dial)));
+                let ups = Upstream::new(dial);
+                if ups.is_tls {
+                    any_upstream_tls = true;
+                }
+                upstreams.push(Arc::new(ups));
             }
         }
     }
@@ -89,6 +96,43 @@ pub fn build_reverse_proxy_from_config(details: &HashMap<String, serde_json::Val
         }
     }
 
-    let handler = ReverseProxyHandler::new(upstreams, load_balancer, mutator);
+    // 4. Parse transport configuration
+    let mut transport = HttpTransport::new();
+    if let Some(trans_obj) = details.get("transport").and_then(|v| v.as_object()) {
+        if let Some(dt) = trans_obj.get("dial_timeout").and_then(|v| v.as_str()) {
+            if let Some(d) = crate::transport::parse_duration(dt) {
+                transport.dial_timeout = d;
+            }
+        }
+        if let Some(rt) = trans_obj
+            .get("response_timeout")
+            .or_else(|| trans_obj.get("response_header_timeout"))
+            .and_then(|v| v.as_str())
+        {
+            if let Some(d) = crate::transport::parse_duration(rt) {
+                transport.response_timeout = d;
+            }
+        }
+        if let Some(tls_val) = trans_obj.get("tls") {
+            transport.tls = true;
+            if let Some(tls_obj) = tls_val.as_object() {
+                if let Some(sn) = tls_obj.get("server_name").and_then(|v| v.as_str()) {
+                    transport.tls_server_name = Some(sn.to_string());
+                }
+                if let Some(skip) = tls_obj
+                    .get("insecure_skip_verify")
+                    .and_then(|v| v.as_bool())
+                {
+                    transport.tls_insecure_skip_verify = skip;
+                }
+            }
+        }
+    }
+    if any_upstream_tls {
+        transport.tls = true;
+    }
+
+    let handler =
+        ReverseProxyHandler::new(upstreams, load_balancer, mutator).with_transport(transport);
     Ok(handler)
 }

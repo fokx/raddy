@@ -37,7 +37,10 @@ impl Handler for RequestBodyLimitHandler {
         if ctx.body.len() > self.max_size {
             ctx.set_response(
                 StatusCode::PAYLOAD_TOO_LARGE,
-                format!("413 Payload Too Large (max allowed: {} bytes)\n", self.max_size),
+                format!(
+                    "413 Payload Too Large (max allowed: {} bytes)\n",
+                    self.max_size
+                ),
             );
         }
         Ok(())

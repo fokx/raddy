@@ -1,8 +1,8 @@
 use async_trait::async_trait;
 use bytes::Bytes;
-use http::header::CONTENT_LENGTH;
 use http::HeaderValue;
-use minijinja::{context, Environment};
+use http::header::CONTENT_LENGTH;
+use minijinja::{Environment, context};
 use raddy_core::context::Context;
 use raddy_core::error::Result;
 use raddy_core::handler::Handler;
@@ -59,7 +59,9 @@ impl Handler for TemplatesHandler {
             }
         };
 
-        let host = ctx.headers.get("host")
+        let host = ctx
+            .headers
+            .get("host")
             .and_then(|h| h.to_str().ok())
             .or_else(|| ctx.uri.host())
             .unwrap_or("localhost")
@@ -67,7 +69,10 @@ impl Handler for TemplatesHandler {
         let path = ctx.uri.path().to_string();
         let query = ctx.uri.query().unwrap_or("").to_string();
         let method = ctx.method.as_str().to_string();
-        let remote_ip = ctx.remote_addr.map(|a| a.ip().to_string()).unwrap_or_default();
+        let remote_ip = ctx
+            .remote_addr
+            .map(|a| a.ip().to_string())
+            .unwrap_or_default();
         let vars = ctx.vars.clone();
 
         let req_ctx = context! {
@@ -102,4 +107,3 @@ impl Handler for TemplatesHandler {
         true
     }
 }
-

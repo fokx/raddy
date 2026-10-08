@@ -1,4 +1,4 @@
-use raddy_caddyfile::{parse_address, Address};
+use raddy_caddyfile::{Address, parse_address};
 
 #[test]
 fn test_parse_address() {
@@ -20,19 +20,75 @@ fn test_parse_address() {
         ("http://localhost:https", "", "", "", "", true),
         ("http://localhost:http", "", "", "", "", true),
         ("host:https/path", "", "", "", "", true),
-        ("http://localhost:443", "http", "localhost", "443", "", false),
-        ("https://localhost:80", "https", "localhost", "80", "", false),
+        (
+            "http://localhost:443",
+            "http",
+            "localhost",
+            "443",
+            "",
+            false,
+        ),
+        (
+            "https://localhost:80",
+            "https",
+            "localhost",
+            "80",
+            "",
+            false,
+        ),
         ("http://localhost", "http", "localhost", "", "", false),
         ("https://localhost", "https", "localhost", "", "", false),
-        ("http://{env.APP_DOMAIN}", "http", "{env.APP_DOMAIN}", "", "", false),
-        ("{env.APP_DOMAIN}:80", "", "{env.APP_DOMAIN}", "80", "", false),
-        ("{env.APP_DOMAIN}/path", "", "{env.APP_DOMAIN}", "", "/path", false),
-        ("example.com/{env.APP_PATH}", "", "example.com", "", "/{env.APP_PATH}", false),
+        (
+            "http://{env.APP_DOMAIN}",
+            "http",
+            "{env.APP_DOMAIN}",
+            "",
+            "",
+            false,
+        ),
+        (
+            "{env.APP_DOMAIN}:80",
+            "",
+            "{env.APP_DOMAIN}",
+            "80",
+            "",
+            false,
+        ),
+        (
+            "{env.APP_DOMAIN}/path",
+            "",
+            "{env.APP_DOMAIN}",
+            "",
+            "/path",
+            false,
+        ),
+        (
+            "example.com/{env.APP_PATH}",
+            "",
+            "example.com",
+            "",
+            "/{env.APP_PATH}",
+            false,
+        ),
         ("http://127.0.0.1", "http", "127.0.0.1", "", "", false),
         ("https://127.0.0.1", "https", "127.0.0.1", "", "", false),
         ("http://[::1]", "http", "::1", "", "", false),
-        ("http://localhost:1234", "http", "localhost", "1234", "", false),
-        ("https://127.0.0.1:1234", "https", "127.0.0.1", "1234", "", false),
+        (
+            "http://localhost:1234",
+            "http",
+            "localhost",
+            "1234",
+            "",
+            false,
+        ),
+        (
+            "https://127.0.0.1:1234",
+            "https",
+            "127.0.0.1",
+            "1234",
+            "",
+            false,
+        ),
         ("http://[::1]:1234", "http", "::1", "1234", "", false),
         ("::1", "", "::1", "", "", false),
         ("localhost::", "", "localhost::", "", "", false),
@@ -42,7 +98,14 @@ fn test_parse_address() {
         ("//asdf", "", "", "", "//asdf", false),
         (":1234/asdf", "", "", "1234", "/asdf", false),
         ("http://host/path", "http", "host", "", "/path", false),
-        ("https://host:443/path/foo", "https", "host", "443", "/path/foo", false),
+        (
+            "https://host:443/path/foo",
+            "https",
+            "host",
+            "443",
+            "/path/foo",
+            false,
+        ),
         ("host:80/path", "", "host", "80", "/path", false),
         ("/path", "", "", "", "/path", false),
     ];
@@ -50,12 +113,31 @@ fn test_parse_address() {
     for (i, (input, scheme, host, port, path, should_err)) in cases.into_iter().enumerate() {
         let res = parse_address(input);
         if should_err {
-            assert!(res.is_err(), "Test {} ({}): Expected error, got ok", i, input);
+            assert!(
+                res.is_err(),
+                "Test {} ({}): Expected error, got ok",
+                i,
+                input
+            );
         } else {
-            assert!(res.is_ok(), "Test {} ({}): Expected ok, got error: {:?}", i, input, res.err());
+            assert!(
+                res.is_ok(),
+                "Test {} ({}): Expected ok, got error: {:?}",
+                i,
+                input,
+                res.err()
+            );
             let actual = res.unwrap();
-            assert_eq!(actual.original, input, "Test {} ({}): original mismatch", i, input);
-            assert_eq!(actual.scheme, scheme, "Test {} ({}): scheme mismatch", i, input);
+            assert_eq!(
+                actual.original, input,
+                "Test {} ({}): original mismatch",
+                i, input
+            );
+            assert_eq!(
+                actual.scheme, scheme,
+                "Test {} ({}): scheme mismatch",
+                i, input
+            );
             assert_eq!(actual.host, host, "Test {} ({}): host mismatch", i, input);
             assert_eq!(actual.port, port, "Test {} ({}): port mismatch", i, input);
             assert_eq!(actual.path, path, "Test {} ({}): path mismatch", i, input);
@@ -160,14 +242,24 @@ fn test_address_string() {
 
     for (i, (addr, expected)) in cases.into_iter().enumerate() {
         let actual = addr.to_string_repr();
-        assert_eq!(actual, expected, "Test {}: expected '{}', got '{}'", i, expected, actual);
+        assert_eq!(
+            actual, expected,
+            "Test {}: expected '{}', got '{}'",
+            i, expected, actual
+        );
     }
 }
 
 #[test]
 fn test_key_normalization() {
     let cases = vec![
-        ("example.com", Address { host: "example.com".into(), ..Default::default() }),
+        (
+            "example.com",
+            Address {
+                host: "example.com".into(),
+                ..Default::default()
+            },
+        ),
         (
             "http://host:1234/path",
             Address {
@@ -255,8 +347,20 @@ fn test_key_normalization() {
         ),
         ("", Address::default()),
         (":", Address::default()),
-        ("[::]", Address { host: "::".into(), ..Default::default() }),
-        ("127.0.0.1", Address { host: "127.0.0.1".into(), ..Default::default() }),
+        (
+            "[::]",
+            Address {
+                host: "::".into(),
+                ..Default::default()
+            },
+        ),
+        (
+            "127.0.0.1",
+            Address {
+                host: "127.0.0.1".into(),
+                ..Default::default()
+            },
+        ),
         (
             "[2001:db8:85a3:8d3:1319:8a2e:370:7348]:1234",
             Address {
@@ -283,11 +387,28 @@ fn test_key_normalization() {
     ];
 
     for (i, (input, expected)) in cases.into_iter().enumerate() {
-        let addr = parse_address(input).unwrap_or_else(|e| panic!("Test {}: Failed to parse '{}': {:?}", i, input, e));
+        let addr = parse_address(input)
+            .unwrap_or_else(|e| panic!("Test {}: Failed to parse '{}': {:?}", i, input, e));
         let actual = addr.normalize();
-        assert_eq!(actual.scheme, expected.scheme, "Test {} ({}): scheme mismatch", i, input);
-        assert_eq!(actual.host, expected.host, "Test {} ({}): host mismatch", i, input);
-        assert_eq!(actual.port, expected.port, "Test {} ({}): port mismatch", i, input);
-        assert_eq!(actual.path, expected.path, "Test {} ({}): path mismatch", i, input);
+        assert_eq!(
+            actual.scheme, expected.scheme,
+            "Test {} ({}): scheme mismatch",
+            i, input
+        );
+        assert_eq!(
+            actual.host, expected.host,
+            "Test {} ({}): host mismatch",
+            i, input
+        );
+        assert_eq!(
+            actual.port, expected.port,
+            "Test {} ({}): port mismatch",
+            i, input
+        );
+        assert_eq!(
+            actual.path, expected.path,
+            "Test {} ({}): path mismatch",
+            i, input
+        );
     }
 }

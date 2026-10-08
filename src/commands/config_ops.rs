@@ -1,7 +1,7 @@
-use std::path::Path;
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use raddy_caddyfile::{adapt_caddyfile_from_file, format_caddyfile_str};
 use raddy_core::config::Config;
+use std::path::Path;
 
 /// Loads or adapts a configuration from a file path.
 /// Automatically detects JSON vs Caddyfile or adheres to `--adapter`.
@@ -23,8 +23,9 @@ pub fn load_or_adapt(path: &Path, adapter: Option<&str>) -> Result<Config> {
             .with_context(|| format!("Failed to parse JSON config at '{}'", path.display()))?;
         Ok(config)
     } else {
-        adapt_caddyfile_from_file(path)
-            .map_err(|e| anyhow::anyhow!("Caddyfile adaptation error in '{}': {}", path.display(), e))
+        adapt_caddyfile_from_file(path).map_err(|e| {
+            anyhow::anyhow!("Caddyfile adaptation error in '{}': {}", path.display(), e)
+        })
     }
 }
 
@@ -95,8 +96,9 @@ pub fn fmt_command(config: &Path, overwrite: bool) -> Result<()> {
 
     if overwrite {
         if content != formatted {
-            std::fs::write(config, &formatted)
-                .with_context(|| format!("Failed to write formatted file to '{}'", config.display()))?;
+            std::fs::write(config, &formatted).with_context(|| {
+                format!("Failed to write formatted file to '{}'", config.display())
+            })?;
             println!("Formatted '{}'", config.display());
         } else {
             println!("'{}' already formatted", config.display());

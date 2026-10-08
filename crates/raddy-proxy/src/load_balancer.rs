@@ -1,15 +1,19 @@
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
 use raddy_core::context::Context;
 use raddy_core::placeholder::PlaceholderProvider;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::upstream::Upstream;
 
 /// Load balancing algorithm trait.
 pub trait LoadBalancer: Send + Sync {
-    fn select<'a>(&self, upstreams: &'a [Arc<Upstream>], ctx: &Context) -> Option<&'a Arc<Upstream>>;
+    fn select<'a>(
+        &self,
+        upstreams: &'a [Arc<Upstream>],
+        ctx: &Context,
+    ) -> Option<&'a Arc<Upstream>>;
 }
 
 /// Round Robin load balancer.
@@ -25,7 +29,11 @@ impl RoundRobin {
 }
 
 impl LoadBalancer for RoundRobin {
-    fn select<'a>(&self, upstreams: &'a [Arc<Upstream>], _ctx: &Context) -> Option<&'a Arc<Upstream>> {
+    fn select<'a>(
+        &self,
+        upstreams: &'a [Arc<Upstream>],
+        _ctx: &Context,
+    ) -> Option<&'a Arc<Upstream>> {
         let n = upstreams.len();
         if n == 0 {
             return None;
@@ -48,7 +56,11 @@ impl LoadBalancer for RoundRobin {
 pub struct LeastConn;
 
 impl LoadBalancer for LeastConn {
-    fn select<'a>(&self, upstreams: &'a [Arc<Upstream>], _ctx: &Context) -> Option<&'a Arc<Upstream>> {
+    fn select<'a>(
+        &self,
+        upstreams: &'a [Arc<Upstream>],
+        _ctx: &Context,
+    ) -> Option<&'a Arc<Upstream>> {
         upstreams
             .iter()
             .filter(|u| u.is_available())
@@ -61,8 +73,13 @@ impl LoadBalancer for LeastConn {
 pub struct Random;
 
 impl LoadBalancer for Random {
-    fn select<'a>(&self, upstreams: &'a [Arc<Upstream>], _ctx: &Context) -> Option<&'a Arc<Upstream>> {
-        let available: Vec<&'a Arc<Upstream>> = upstreams.iter().filter(|u| u.is_available()).collect();
+    fn select<'a>(
+        &self,
+        upstreams: &'a [Arc<Upstream>],
+        _ctx: &Context,
+    ) -> Option<&'a Arc<Upstream>> {
+        let available: Vec<&'a Arc<Upstream>> =
+            upstreams.iter().filter(|u| u.is_available()).collect();
         if available.is_empty() {
             return None;
         }
@@ -76,13 +93,20 @@ impl LoadBalancer for Random {
 pub struct IpHash;
 
 impl LoadBalancer for IpHash {
-    fn select<'a>(&self, upstreams: &'a [Arc<Upstream>], ctx: &Context) -> Option<&'a Arc<Upstream>> {
-        let available: Vec<&'a Arc<Upstream>> = upstreams.iter().filter(|u| u.is_available()).collect();
+    fn select<'a>(
+        &self,
+        upstreams: &'a [Arc<Upstream>],
+        ctx: &Context,
+    ) -> Option<&'a Arc<Upstream>> {
+        let available: Vec<&'a Arc<Upstream>> =
+            upstreams.iter().filter(|u| u.is_available()).collect();
         if available.is_empty() {
             return None;
         }
 
-        let key = ctx.get_placeholder("remote_host").unwrap_or_else(|| "default_ip".into());
+        let key = ctx
+            .get_placeholder("remote_host")
+            .unwrap_or_else(|| "default_ip".into());
         let mut hasher = DefaultHasher::new();
         key.hash(&mut hasher);
         let hash = hasher.finish() as usize;
@@ -96,8 +120,13 @@ impl LoadBalancer for IpHash {
 pub struct UriHash;
 
 impl LoadBalancer for UriHash {
-    fn select<'a>(&self, upstreams: &'a [Arc<Upstream>], ctx: &Context) -> Option<&'a Arc<Upstream>> {
-        let available: Vec<&'a Arc<Upstream>> = upstreams.iter().filter(|u| u.is_available()).collect();
+    fn select<'a>(
+        &self,
+        upstreams: &'a [Arc<Upstream>],
+        ctx: &Context,
+    ) -> Option<&'a Arc<Upstream>> {
+        let available: Vec<&'a Arc<Upstream>> =
+            upstreams.iter().filter(|u| u.is_available()).collect();
         if available.is_empty() {
             return None;
         }
@@ -116,7 +145,11 @@ impl LoadBalancer for UriHash {
 pub struct First;
 
 impl LoadBalancer for First {
-    fn select<'a>(&self, upstreams: &'a [Arc<Upstream>], _ctx: &Context) -> Option<&'a Arc<Upstream>> {
+    fn select<'a>(
+        &self,
+        upstreams: &'a [Arc<Upstream>],
+        _ctx: &Context,
+    ) -> Option<&'a Arc<Upstream>> {
         upstreams.iter().find(|u| u.is_available())
     }
 }
@@ -140,7 +173,11 @@ impl WeightedRoundRobin {
 }
 
 impl LoadBalancer for WeightedRoundRobin {
-    fn select<'a>(&self, upstreams: &'a [Arc<Upstream>], _ctx: &Context) -> Option<&'a Arc<Upstream>> {
+    fn select<'a>(
+        &self,
+        upstreams: &'a [Arc<Upstream>],
+        _ctx: &Context,
+    ) -> Option<&'a Arc<Upstream>> {
         if upstreams.is_empty() || self.total_weight == 0 {
             return None;
         }

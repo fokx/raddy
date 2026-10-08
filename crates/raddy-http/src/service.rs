@@ -1,15 +1,15 @@
-use std::net::SocketAddr;
-use std::sync::Arc;
-use bytes::Bytes;
-use http::{HeaderValue, Response, StatusCode};
-use hyper::body::Frame;
-use http_body_util::combinators::BoxBody;
-use http_body_util::{BodyExt, Full, StreamBody};
-use hyper::body::Incoming;
-use hyper::Request;
-use raddy_core::context::Context;
 use crate::logging::LogPipeline;
 use crate::router::VirtualHostRouter;
+use bytes::Bytes;
+use http::{HeaderValue, Response, StatusCode};
+use http_body_util::combinators::BoxBody;
+use http_body_util::{BodyExt, Full, StreamBody};
+use hyper::Request;
+use hyper::body::Frame;
+use hyper::body::Incoming;
+use raddy_core::context::Context;
+use std::net::SocketAddr;
+use std::sync::Arc;
 
 pub type ResponseBoxBody = BoxBody<Bytes, std::io::Error>;
 
@@ -38,7 +38,10 @@ pub async fn handle_request(
     // Intercept ACME HTTP-01 challenge if present
     if parts.uri.path().starts_with("/.well-known/acme-challenge/") {
         if let Some(ref store) = challenge_store {
-            let token = parts.uri.path().trim_start_matches("/.well-known/acme-challenge/");
+            let token = parts
+                .uri
+                .path()
+                .trim_start_matches("/.well-known/acme-challenge/");
             if let Some(key_auth) = store.get(token) {
                 tracing::info!("Responding to ACME HTTP-01 challenge for token '{}'", token);
                 let resp = Response::builder()
@@ -48,7 +51,10 @@ pub async fn handle_request(
                     .unwrap();
                 return Ok(resp);
             } else {
-                tracing::warn!("ACME HTTP-01 challenge token '{}' not found in store", token);
+                tracing::warn!(
+                    "ACME HTTP-01 challenge token '{}' not found in store",
+                    token
+                );
             }
         }
     }
@@ -89,8 +95,11 @@ pub async fn handle_request(
     // Advertise HTTP/3 over QUIC via Alt-Svc if enabled
     if let Some(port) = alt_svc_port {
         if !ctx.response_headers.contains_key("alt-svc") {
-            if let Ok(val) = http::header::HeaderValue::from_str(&format!("h3=\":{}\"; ma=2592000", port)) {
-                ctx.response_headers.insert(http::header::HeaderName::from_static("alt-svc"), val);
+            if let Ok(val) =
+                http::header::HeaderValue::from_str(&format!("h3=\":{}\"; ma=2592000", port))
+            {
+                ctx.response_headers
+                    .insert(http::header::HeaderName::from_static("alt-svc"), val);
             }
         }
     }

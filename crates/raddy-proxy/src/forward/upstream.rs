@@ -1,14 +1,14 @@
+use super::acl::{AclRule, check_early_domain_rules, is_host_allowed};
+use crate::error::{ProxyError, Result};
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD as BASE64;
+use rustls_pki_types::ServerName;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use std::time::Duration;
-use base64::engine::general_purpose::STANDARD as BASE64;
-use base64::Engine;
-use rustls_pki_types::ServerName;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio_rustls::TlsConnector;
-use crate::error::{ProxyError, Result};
-use super::acl::{check_early_domain_rules, is_host_allowed, AclRule};
 
 pub trait AsyncStream: AsyncRead + AsyncWrite + Send + Unpin {}
 impl<T: AsyncRead + AsyncWrite + Send + Unpin> AsyncStream for T {}
@@ -188,17 +188,13 @@ pub async fn dial_via_upstream(
     let ups_addr = format!("{}:{}", upstream.host, upstream.port);
     let tcp_stream = tokio::time::timeout(dial_timeout, TcpStream::connect(&ups_addr))
         .await
-        .map_err(|_| {
-            ProxyError::Transport {
-                upstream: ups_addr.clone(),
-                message: "Connection timeout to upstream proxy".into(),
-            }
+        .map_err(|_| ProxyError::Transport {
+            upstream: ups_addr.clone(),
+            message: "Connection timeout to upstream proxy".into(),
         })?
-        .map_err(|e| {
-            ProxyError::Transport {
-                upstream: ups_addr.clone(),
-                message: format!("Connection failed to upstream proxy: {}", e),
-            }
+        .map_err(|e| ProxyError::Transport {
+            upstream: ups_addr.clone(),
+            message: format!("Connection failed to upstream proxy: {}", e),
         })?;
 
     let _ = tcp_stream.set_nodelay(true);
@@ -234,12 +230,13 @@ pub async fn dial_via_upstream(
             )))
         })?;
 
-        let tls_stream = connector.connect(server_name, tcp_stream).await.map_err(|e| {
-            ProxyError::Transport {
+        let tls_stream = connector
+            .connect(server_name, tcp_stream)
+            .await
+            .map_err(|e| ProxyError::Transport {
                 upstream: ups_addr.clone(),
                 message: format!("TLS handshake failed with upstream: {}", e),
-            }
-        })?;
+            })?;
 
         Box::new(tls_stream)
     } else {
@@ -254,12 +251,13 @@ pub async fn dial_via_upstream(
     }
     connect_req.push_str("\r\n");
 
-    stream.write_all(connect_req.as_bytes()).await.map_err(|e| {
-        ProxyError::Transport {
+    stream
+        .write_all(connect_req.as_bytes())
+        .await
+        .map_err(|e| ProxyError::Transport {
             upstream: ups_addr.clone(),
             message: format!("Failed to write CONNECT request to upstream: {}", e),
-        }
-    })?;
+        })?;
     stream.flush().await?;
 
     // Read response line and headers
@@ -367,42 +365,4 @@ async fn connect_socks5(
     Ok(Box::new(stream))
 }
 
-#[derive(Debug)]
-struct NoVerifyServerCert;
-
-impl rustls::client::danger::ServerCertVerifier for NoVerifyServerCert {
-    fn verify_server_cert(
-        &self,
-        _end_entity: &rustls_pki_types::CertificateDer<'_>,
-        _intermediates: &[rustls_pki_types::CertificateDer<'_>],
-        _server_name: &rustls_pki_types::ServerName<'_>,
-        _ocsp_response: &[u8],
-        _now: rustls_pki_types::UnixTime,
-    ) -> std::result::Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
-        Ok(rustls::client::danger::ServerCertVerified::assertion())
-    }
-
-    fn verify_tls12_signature(
-        &self,
-        _message: &[u8],
-        _cert: &rustls_pki_types::CertificateDer<'_>,
-        _dss: &rustls::DigitallySignedStruct,
-    ) -> std::result::Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
-        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
-    }
-
-    fn verify_tls13_signature(
-        &self,
-        _message: &[u8],
-        _cert: &rustls_pki_types::CertificateDer<'_>,
-        _dss: &rustls::DigitallySignedStruct,
-    ) -> std::result::Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
-        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
-    }
-
-    fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
-        rustls::crypto::aws_lc_rs::default_provider()
-            .signature_verification_algorithms
-            .supported_schemes()
-    }
-}
+use crate::transport::NoVerifyServerCert;

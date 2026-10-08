@@ -20,7 +20,8 @@ impl MapHandler {
         default: Option<String>,
     ) -> Self {
         let dest = dest_var.into();
-        let clean_dest = dest.strip_prefix('{')
+        let clean_dest = dest
+            .strip_prefix('{')
             .and_then(|s| s.strip_suffix('}'))
             .unwrap_or(&dest)
             .to_string();

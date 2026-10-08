@@ -1,6 +1,6 @@
-use std::sync::Arc;
-use arc_swap::ArcSwap;
 use crate::config::Config;
+use arc_swap::ArcSwap;
+use std::sync::Arc;
 
 /// Global application state with lock-free atomic hot reload capabilities.
 pub struct AppState {

@@ -1,11 +1,11 @@
-use std::net::SocketAddr;
-use std::sync::Arc;
 use bytes::{Buf, Bytes};
 use http::{Response, StatusCode};
 use quinn::crypto::rustls::QuicServerConfig;
 use quinn::{Connection, ServerConfig as QuinnServerConfig};
-use rustls::server::ServerConfig as RustlsServerConfig;
 use raddy_core::context::Context;
+use rustls::server::ServerConfig as RustlsServerConfig;
+use std::net::SocketAddr;
+use std::sync::Arc;
 
 use crate::error::{HttpServerError, Result};
 use crate::router::VirtualHostRouter;
@@ -15,8 +15,9 @@ pub fn build_quic_server_config(rustls_config: &RustlsServerConfig) -> Result<Qu
     let mut quic_tls_cfg = rustls_config.clone();
     quic_tls_cfg.alpn_protocols = vec![b"h3".to_vec()];
 
-    let quic_crypto = QuicServerConfig::try_from(quic_tls_cfg)
-        .map_err(|e| HttpServerError::Http3(format!("Failed to build QUIC server crypto: {}", e)))?;
+    let quic_crypto = QuicServerConfig::try_from(quic_tls_cfg).map_err(|e| {
+        HttpServerError::Http3(format!("Failed to build QUIC server crypto: {}", e))
+    })?;
 
     Ok(QuinnServerConfig::with_crypto(Arc::new(quic_crypto)))
 }
@@ -45,7 +46,15 @@ pub async fn serve_h3_connection(
         let pipeline_clone = log_pipeline.clone();
         let logs_clone = server_logs.clone();
         tokio::spawn(async move {
-            if let Err(e) = handle_h3_stream(resolver, remote_addr, router_clone, pipeline_clone, logs_clone).await {
+            if let Err(e) = handle_h3_stream(
+                resolver,
+                remote_addr,
+                router_clone,
+                pipeline_clone,
+                logs_clone,
+            )
+            .await
+            {
                 tracing::debug!("H3 stream error from {}: {}", remote_addr, e);
             }
         });
@@ -75,7 +84,12 @@ async fn handle_h3_stream(
         }
     }
 
-    let mut ctx = Context::new(parts.method, parts.uri, parts.headers, Bytes::from(body_bytes));
+    let mut ctx = Context::new(
+        parts.method,
+        parts.uri,
+        parts.headers,
+        Bytes::from(body_bytes),
+    );
     ctx.remote_addr = Some(remote_addr);
 
     if let Err(e) = router.route_request(&mut ctx).await {

@@ -1,7 +1,7 @@
-use std::sync::Arc;
 use raddy_admin::{AdminServer, AppState};
-use raddy_caddyfile::{parse_caddyfile, Adapter};
+use raddy_caddyfile::{Adapter, parse_caddyfile};
 use raddy_core::module::ModuleRegistry;
+use std::sync::Arc;
 
 #[tokio::test]
 async fn test_admin_api_status_and_config_endpoints() {
@@ -24,11 +24,12 @@ async fn test_admin_api_status_and_config_endpoints() {
     let (admin_shutdown_tx, admin_shutdown_rx) = tokio::sync::watch::channel(false);
 
     // Initial server start
-    state.reload(state.config.load().as_ref().clone()).await.unwrap();
+    state
+        .reload(state.config.load().as_ref().clone())
+        .await
+        .unwrap();
 
-    let server_task = tokio::spawn(async move {
-        admin_server.run(admin_shutdown_rx).await
-    });
+    let server_task = tokio::spawn(async move { admin_server.run(admin_shutdown_rx).await });
 
     let client = reqwest::Client::new();
     let base_url = format!("http://127.0.0.1:{}", admin_addr.port());
@@ -41,17 +42,29 @@ async fn test_admin_api_status_and_config_endpoints() {
     assert_eq!(val["status"], "ok");
 
     // 2. GET /config/
-    let resp = client.get(format!("{}/config/", base_url)).send().await.unwrap();
+    let resp = client
+        .get(format!("{}/config/", base_url))
+        .send()
+        .await
+        .unwrap();
     assert_eq!(resp.status(), reqwest::StatusCode::OK);
     let config_val: serde_json::Value = resp.json().await.unwrap();
     assert!(config_val.get("apps").is_some());
 
     // 3. GET /config/apps/http/servers
-    let resp = client.get(format!("{}/config/apps/http/servers", base_url)).send().await.unwrap();
+    let resp = client
+        .get(format!("{}/config/apps/http/servers", base_url))
+        .send()
+        .await
+        .unwrap();
     assert_eq!(resp.status(), reqwest::StatusCode::OK);
 
     // 4. GET /config/non_existent -> 404
-    let resp = client.get(format!("{}/config/non_existent_path", base_url)).send().await.unwrap();
+    let resp = client
+        .get(format!("{}/config/non_existent_path", base_url))
+        .send()
+        .await
+        .unwrap();
     assert_eq!(resp.status(), reqwest::StatusCode::NOT_FOUND);
 
     // 5. POST /config/custom_meta (insert new config node)
@@ -64,7 +77,11 @@ async fn test_admin_api_status_and_config_endpoints() {
     assert_eq!(post_resp.status(), reqwest::StatusCode::OK);
 
     // 6. GET /config/custom_meta
-    let get_custom = client.get(format!("{}/config/custom_meta", base_url)).send().await.unwrap();
+    let get_custom = client
+        .get(format!("{}/config/custom_meta", base_url))
+        .send()
+        .await
+        .unwrap();
     assert_eq!(get_custom.status(), reqwest::StatusCode::OK);
     let meta_val: serde_json::Value = get_custom.json().await.unwrap();
     assert_eq!(meta_val["version"], "v1.0.0");
@@ -79,7 +96,11 @@ async fn test_admin_api_status_and_config_endpoints() {
         .unwrap();
     assert_eq!(patch_resp.status(), reqwest::StatusCode::OK);
 
-    let get_patched = client.get(format!("{}/config/custom_meta", base_url)).send().await.unwrap();
+    let get_patched = client
+        .get(format!("{}/config/custom_meta", base_url))
+        .send()
+        .await
+        .unwrap();
     let patched_val: serde_json::Value = get_patched.json().await.unwrap();
     assert_eq!(patched_val["version"], "v1.1.0");
     assert_eq!(patched_val["author"], "raddy");
@@ -92,11 +113,19 @@ async fn test_admin_api_status_and_config_endpoints() {
         .unwrap();
     assert_eq!(del_resp.status(), reqwest::StatusCode::OK);
 
-    let get_deleted = client.get(format!("{}/config/custom_meta", base_url)).send().await.unwrap();
+    let get_deleted = client
+        .get(format!("{}/config/custom_meta", base_url))
+        .send()
+        .await
+        .unwrap();
     assert_eq!(get_deleted.status(), reqwest::StatusCode::NOT_FOUND);
 
     // 9. GET /pki/ca/local (without TLS Manager -> 404)
-    let pki_resp = client.get(format!("{}/pki/ca/local", base_url)).send().await.unwrap();
+    let pki_resp = client
+        .get(format!("{}/pki/ca/local", base_url))
+        .send()
+        .await
+        .unwrap();
     assert_eq!(pki_resp.status(), reqwest::StatusCode::NOT_FOUND);
 
     admin_shutdown_tx.send(true).unwrap();
@@ -124,9 +153,7 @@ async fn test_zero_downtime_hot_reload() {
     admin_server.bind().await.unwrap();
     let admin_addr = admin_server.local_addr().unwrap();
     let (admin_shutdown_tx, admin_shutdown_rx) = tokio::sync::watch::channel(false);
-    let admin_task = tokio::spawn(async move {
-        admin_server.run(admin_shutdown_rx).await
-    });
+    let admin_task = tokio::spawn(async move { admin_server.run(admin_shutdown_rx).await });
 
     // Start initial HTTP server
     state.reload(config_v1).await.expect("Failed to start V1");
@@ -136,7 +163,11 @@ async fn test_zero_downtime_hot_reload() {
     let site_url = "http://127.0.0.1:28091";
 
     // 2. Query site: should receive V1
-    let resp_v1 = client.get(site_url).send().await.expect("Failed to query V1");
+    let resp_v1 = client
+        .get(site_url)
+        .send()
+        .await
+        .expect("Failed to query V1");
     assert_eq!(resp_v1.status(), reqwest::StatusCode::OK);
     assert_eq!(resp_v1.text().await.unwrap(), "Hello from V1");
 
@@ -158,9 +189,16 @@ async fn test_zero_downtime_hot_reload() {
     assert_eq!(reload_resp.status(), reqwest::StatusCode::OK);
 
     // 4. Query site again: should immediately receive V2!
-    let resp_v2 = client.get(site_url).send().await.expect("Failed to query V2");
+    let resp_v2 = client
+        .get(site_url)
+        .send()
+        .await
+        .expect("Failed to query V2");
     assert_eq!(resp_v2.status(), reqwest::StatusCode::OK);
-    assert_eq!(resp_v2.text().await.unwrap(), "Hello from V2 (Hot Reloaded!)");
+    assert_eq!(
+        resp_v2.text().await.unwrap(),
+        "Hello from V2 (Hot Reloaded!)"
+    );
 
     // 5. Hot reload with invalid config: old server should continue serving V2!
     let bad_caddyfile = "invalid caddyfile syntax {{{{";
@@ -177,7 +215,10 @@ async fn test_zero_downtime_hot_reload() {
     // Site still alive and serves V2
     let resp_still_v2 = client.get(site_url).send().await.unwrap();
     assert_eq!(resp_still_v2.status(), reqwest::StatusCode::OK);
-    assert_eq!(resp_still_v2.text().await.unwrap(), "Hello from V2 (Hot Reloaded!)");
+    assert_eq!(
+        resp_still_v2.text().await.unwrap(),
+        "Hello from V2 (Hot Reloaded!)"
+    );
 
     // Clean shutdown
     admin_shutdown_tx.send(true).unwrap();
@@ -203,9 +244,7 @@ async fn test_admin_stop_endpoint() {
     admin_server.bind().await.unwrap();
     let admin_addr = admin_server.local_addr().unwrap();
     let (_admin_shutdown_tx, admin_shutdown_rx) = tokio::sync::watch::channel(false);
-    let admin_task = tokio::spawn(async move {
-        admin_server.run(admin_shutdown_rx).await
-    });
+    let admin_task = tokio::spawn(async move { admin_server.run(admin_shutdown_rx).await });
 
     state.reload(config).await.unwrap();
 
@@ -213,7 +252,11 @@ async fn test_admin_stop_endpoint() {
     let admin_url = format!("http://127.0.0.1:{}", admin_addr.port());
 
     // Call POST /stop
-    let stop_resp = client.post(format!("{}/stop", admin_url)).send().await.unwrap();
+    let stop_resp = client
+        .post(format!("{}/stop", admin_url))
+        .send()
+        .await
+        .unwrap();
     assert_eq!(stop_resp.status(), reqwest::StatusCode::OK);
 
     // Wait for server task to finish gracefully

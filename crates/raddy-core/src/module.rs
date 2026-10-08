@@ -1,7 +1,7 @@
-use std::collections::HashMap;
-use std::sync::Arc;
 use crate::error::{CoreError, Result};
 use crate::handler::Handler;
+use std::collections::HashMap;
+use std::sync::Arc;
 
 pub type HandlerFactory = fn(serde_json::Value) -> Result<Arc<dyn Handler>>;
 

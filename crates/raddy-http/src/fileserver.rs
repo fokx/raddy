@@ -1,10 +1,10 @@
-use std::path::{Path, PathBuf};
 use async_trait::async_trait;
 use bytes::Bytes;
 use http::{HeaderValue, StatusCode};
 use raddy_core::context::Context;
 use raddy_core::error::Result;
 use raddy_core::handler::Handler;
+use std::path::{Path, PathBuf};
 
 /// Static file server handler implementing Caddy's `file_server` directive.
 #[derive(Debug, Clone)]
@@ -48,7 +48,10 @@ impl Handler for FileServerHandler {
         let canonical_root = match root_path.canonicalize() {
             Ok(p) => p,
             Err(_) => {
-                ctx.set_response(StatusCode::NOT_FOUND, "404 Not Found: Root directory not accessible\n");
+                ctx.set_response(
+                    StatusCode::NOT_FOUND,
+                    "404 Not Found: Root directory not accessible\n",
+                );
                 return Ok(());
             }
         };
@@ -71,7 +74,11 @@ impl Handler for FileServerHandler {
             // Enforce trailing slash on directory URLs so relative links in directory listings resolve correctly
             let orig_path = ctx.orig_uri.path();
             if !orig_path.ends_with('/') {
-                let query = ctx.orig_uri.query().map(|q| format!("?{}", q)).unwrap_or_default();
+                let query = ctx
+                    .orig_uri
+                    .query()
+                    .map(|q| format!("?{}", q))
+                    .unwrap_or_default();
                 let redirect_to = format!("{}/{}", orig_path, query);
                 if let Ok(loc) = HeaderValue::try_from(redirect_to) {
                     ctx.response_headers.insert(http::header::LOCATION, loc);
@@ -87,9 +94,13 @@ impl Handler for FileServerHandler {
             }
 
             if self.browse {
-                return render_directory_listing(&canonical_target, &req_path, &self.hide, ctx).await;
+                return render_directory_listing(&canonical_target, &req_path, &self.hide, ctx)
+                    .await;
             } else {
-                ctx.set_response(StatusCode::NOT_FOUND, "404 Not Found: Directory index forbidden\n");
+                ctx.set_response(
+                    StatusCode::NOT_FOUND,
+                    "404 Not Found: Directory index forbidden\n",
+                );
                 return Ok(());
             }
         }
@@ -133,7 +144,11 @@ fn parse_range(range_header: &str, file_len: u64) -> FileRange {
             if suffix == 0 {
                 return FileRange::NotSatisfiable;
             }
-            let start = if suffix >= file_len { 0 } else { file_len - suffix };
+            let start = if suffix >= file_len {
+                0
+            } else {
+                file_len - suffix
+            };
             let end = file_len - 1;
             FileRange::Partial(start, end)
         } else {
@@ -208,8 +223,14 @@ async fn serve_file(file_path: &Path, ctx: &mut Context) -> Result<()> {
         if let Ok(ims_str) = ims.to_str() {
             if let Ok(ims_time) = httpdate::parse_http_date(ims_str) {
                 if let Ok(mtime) = metadata.modified() {
-                    let mtime_secs = mtime.duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
-                    let ims_secs = ims_time.duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+                    let mtime_secs = mtime
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs();
+                    let ims_secs = ims_time
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs();
                     if mtime_secs <= ims_secs {
                         ctx.status = Some(StatusCode::NOT_MODIFIED);
                         ctx.response_written = true;
@@ -233,7 +254,8 @@ async fn serve_file(file_path: &Path, ctx: &mut Context) -> Result<()> {
     }
     if let Ok(mtime) = metadata.modified() {
         if let Ok(val) = HeaderValue::try_from(httpdate::fmt_http_date(mtime)) {
-            ctx.response_headers.insert(http::header::LAST_MODIFIED, val);
+            ctx.response_headers
+                .insert(http::header::LAST_MODIFIED, val);
         }
     }
     ctx.response_headers.insert(
@@ -250,24 +272,29 @@ async fn serve_file(file_path: &Path, ctx: &mut Context) -> Result<()> {
     let (status, start, length) = match range {
         Some(FileRange::Partial(start, end)) => {
             let length = end - start + 1;
-            if let Ok(val) = HeaderValue::try_from(format!("bytes {}-{}/{}", start, end, file_len)) {
-                ctx.response_headers.insert(http::header::CONTENT_RANGE, val);
+            if let Ok(val) = HeaderValue::try_from(format!("bytes {}-{}/{}", start, end, file_len))
+            {
+                ctx.response_headers
+                    .insert(http::header::CONTENT_RANGE, val);
             }
             if let Ok(val) = HeaderValue::try_from(length.to_string()) {
-                ctx.response_headers.insert(http::header::CONTENT_LENGTH, val);
+                ctx.response_headers
+                    .insert(http::header::CONTENT_LENGTH, val);
             }
             (StatusCode::PARTIAL_CONTENT, start, length)
         }
         Some(FileRange::NotSatisfiable) => {
             if let Ok(val) = HeaderValue::try_from(format!("bytes */{}", file_len)) {
-                ctx.response_headers.insert(http::header::CONTENT_RANGE, val);
+                ctx.response_headers
+                    .insert(http::header::CONTENT_RANGE, val);
             }
             ctx.set_response(StatusCode::RANGE_NOT_SATISFIABLE, Bytes::new());
             return Ok(());
         }
         _ => {
             if let Ok(val) = HeaderValue::try_from(file_len.to_string()) {
-                ctx.response_headers.insert(http::header::CONTENT_LENGTH, val);
+                ctx.response_headers
+                    .insert(http::header::CONTENT_LENGTH, val);
             }
             (StatusCode::OK, 0, file_len)
         }
@@ -292,13 +319,19 @@ async fn serve_file(file_path: &Path, ctx: &mut Context) -> Result<()> {
     if length <= STREAM_THRESHOLD {
         if start > 0 {
             if let Err(e) = file.seek(std::io::SeekFrom::Start(start)).await {
-                ctx.set_response(StatusCode::INTERNAL_SERVER_ERROR, format!("500 Seek error: {}\n", e));
+                ctx.set_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("500 Seek error: {}\n", e),
+                );
                 return Ok(());
             }
         }
         let mut buf = vec![0u8; length as usize];
         if let Err(e) = file.read_exact(&mut buf).await {
-            ctx.set_response(StatusCode::INTERNAL_SERVER_ERROR, format!("500 Read error: {}\n", e));
+            ctx.set_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("500 Read error: {}\n", e),
+            );
             return Ok(());
         }
         ctx.set_response(status, buf);
@@ -308,7 +341,10 @@ async fn serve_file(file_path: &Path, ctx: &mut Context) -> Result<()> {
     // For large files (> 64KB, several GBs), STREAM chunks without loading the whole file into RAM!
     if start > 0 {
         if let Err(e) = file.seek(std::io::SeekFrom::Start(start)).await {
-            ctx.set_response(StatusCode::INTERNAL_SERVER_ERROR, format!("500 Seek error: {}\n", e));
+            ctx.set_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("500 Seek error: {}\n", e),
+            );
             return Ok(());
         }
     }
@@ -319,11 +355,19 @@ async fn serve_file(file_path: &Path, ctx: &mut Context) -> Result<()> {
     Ok(())
 }
 
-async fn render_directory_listing(dir_path: &Path, req_path: &str, hide: &[String], ctx: &mut Context) -> Result<()> {
+async fn render_directory_listing(
+    dir_path: &Path,
+    req_path: &str,
+    hide: &[String],
+    ctx: &mut Context,
+) -> Result<()> {
     let mut entries = match tokio::fs::read_dir(dir_path).await {
         Ok(rd) => rd,
         Err(_) => {
-            ctx.set_response(StatusCode::INTERNAL_SERVER_ERROR, "500 Could not read directory\n");
+            ctx.set_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "500 Could not read directory\n",
+            );
             return Ok(());
         }
     };
@@ -336,7 +380,11 @@ async fn render_directory_listing(dir_path: &Path, req_path: &str, hide: &[Strin
         if hide.iter().any(|h| h == &name) {
             continue;
         }
-        let is_dir = entry.file_type().await.map(|ft| ft.is_dir()).unwrap_or(false);
+        let is_dir = entry
+            .file_type()
+            .await
+            .map(|ft| ft.is_dir())
+            .unwrap_or(false);
         items.push((name, is_dir));
     }
 

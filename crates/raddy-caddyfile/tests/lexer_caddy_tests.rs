@@ -1,4 +1,4 @@
-use raddy_caddyfile::caddyfile::{tokenize, Token};
+use raddy_caddyfile::caddyfile::{Token, tokenize};
 
 struct TestCase {
     input: Vec<u8>,

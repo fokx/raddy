@@ -1,5 +1,5 @@
-use std::collections::HashMap;
 use crate::lexer::Span;
+use std::collections::HashMap;
 
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Caddyfile {

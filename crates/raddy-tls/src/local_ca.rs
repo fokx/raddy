@@ -1,9 +1,8 @@
-use std::net::IpAddr;
-use rcgen::{
-    BasicConstraints, CertificateParams, DistinguishedName, DnType, IsCa,
-    KeyPair, SanType,
-};
 use crate::error::{Result, TlsError};
+use rcgen::{
+    BasicConstraints, CertificateParams, DistinguishedName, DnType, IsCa, KeyPair, SanType,
+};
+use std::net::IpAddr;
 
 /// Internal Certificate Authority for self-signed development certificates.
 pub struct LocalCa {
@@ -70,7 +69,11 @@ impl LocalCa {
         params.subject_alt_names = san_list;
 
         let leaf_key = KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256)?;
-        let leaf_cert = params.signed_by(&leaf_key, &self.ca_cert, &KeyPair::from_pem(&self.ca_key_pem)?)?;
+        let leaf_cert = params.signed_by(
+            &leaf_key,
+            &self.ca_cert,
+            &KeyPair::from_pem(&self.ca_key_pem)?,
+        )?;
 
         // Chain contains the leaf certificate followed by the CA certificate
         let cert_chain_pem = format!("{}\n{}", leaf_cert.pem(), self.ca_cert_pem);

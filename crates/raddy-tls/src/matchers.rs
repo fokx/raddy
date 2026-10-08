@@ -1,6 +1,6 @@
-use std::net::{IpAddr, SocketAddr};
 use ipnet::IpNet;
 use regex::Regex;
+use std::net::{IpAddr, SocketAddr};
 
 /// Matches client TLS SNI server name against a list of names or wildcards.
 #[derive(Debug, Clone)]
@@ -27,7 +27,10 @@ impl ServerNameMatcher {
             }
             if let Some(suffix) = pat.strip_prefix("*.") {
                 // Must have at least one label preceding suffix, e.g. "sub.example.com" matches "*.example.com"
-                if sni_norm.ends_with(suffix) && sni_norm.len() > suffix.len() && !sni_norm[..sni_norm.len() - suffix.len()].contains('.') {
+                if sni_norm.ends_with(suffix)
+                    && sni_norm.len() > suffix.len()
+                    && !sni_norm[..sni_norm.len() - suffix.len()].contains('.')
+                {
                     return true;
                 }
                 // Also support multi-level wildcard like "*.sub.example.com"

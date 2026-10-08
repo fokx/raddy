@@ -1,5 +1,3 @@
-use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
 use async_trait::async_trait;
 use http::StatusCode;
 use raddy_core::config::{HandlerConfig, HttpServer, MatcherSet, Route};
@@ -9,6 +7,8 @@ use raddy_core::handler::*;
 use raddy_core::matcher::*;
 use raddy_core::module::ModuleRegistry;
 use raddy_core::placeholder::PlaceholderProvider;
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use crate::fileserver::FileServerHandler;
 
@@ -89,7 +89,6 @@ impl Router {
     }
 }
 
-
 /// Subroute handler for nested routing (`route` and `handle` blocks).
 pub struct SubrouteHandler {
     router: Router,
@@ -103,6 +102,13 @@ impl SubrouteHandler {
 
 #[async_trait]
 impl Handler for SubrouteHandler {
+    fn is_response_transformer(&self) -> bool {
+        self.router
+            .routes
+            .iter()
+            .any(|r| r.is_response_transformer())
+    }
+
     async fn handle(&self, ctx: &mut Context) -> Result<()> {
         self.router.handle(ctx).await
     }
@@ -127,7 +133,8 @@ impl VirtualHostRouter {
     }
 
     pub fn insert_wildcard(&mut self, suffix: impl Into<String>, router: Router) {
-        self.wildcard_hosts.push((suffix.into().to_lowercase(), router));
+        self.wildcard_hosts
+            .push((suffix.into().to_lowercase(), router));
     }
 
     pub fn set_default(&mut self, router: Router) {
@@ -139,12 +146,19 @@ impl VirtualHostRouter {
     }
 
     pub async fn route_request(&self, ctx: &mut Context) -> Result<()> {
-        let host = ctx.get_placeholder("host").unwrap_or_default().to_lowercase();
+        let host = ctx
+            .get_placeholder("host")
+            .unwrap_or_default()
+            .to_lowercase();
 
         // 1. Exact host match
         if let Some(router) = self.exact_hosts.get(&host) {
             router.handle(ctx).await?;
-        } else if let Some((_, router)) = self.wildcard_hosts.iter().find(|(suffix, _)| host.ends_with(suffix)) {
+        } else if let Some((_, router)) = self
+            .wildcard_hosts
+            .iter()
+            .find(|(suffix, _)| host.ends_with(suffix))
+        {
             // 2. Wildcard host match (e.g. *.example.com)
             router.handle(ctx).await?;
         } else if let Some(ref router) = self.default_router {
@@ -156,17 +170,45 @@ impl VirtualHostRouter {
             let status = ctx.status.unwrap_or(StatusCode::NOT_FOUND);
             ctx.status = Some(status);
             ctx.set_var("err.status_code", status.as_u16().to_string());
-            ctx.set_var("err.status_text", status.canonical_reason().unwrap_or("").to_string());
+            ctx.set_var(
+                "err.status_text",
+                status.canonical_reason().unwrap_or("").to_string(),
+            );
+            ctx.set_var("http.error.status_code", status.as_u16().to_string());
+            ctx.set_var(
+                "http.error.status_text",
+                status.canonical_reason().unwrap_or("").to_string(),
+            );
             if ctx.get_var("err.message").is_none() {
                 ctx.set_var("err.message", format!("HTTP error {}", status.as_u16()));
+            }
+            if ctx.get_var("http.error.message").is_none() {
+                ctx.set_var(
+                    "http.error.message",
+                    format!("HTTP error {}", status.as_u16()),
+                );
             }
             true
         } else if let Some(status) = ctx.status {
             if status.is_client_error() || status.is_server_error() {
                 ctx.set_var("err.status_code", status.as_u16().to_string());
-                ctx.set_var("err.status_text", status.canonical_reason().unwrap_or("").to_string());
+                ctx.set_var(
+                    "err.status_text",
+                    status.canonical_reason().unwrap_or("").to_string(),
+                );
+                ctx.set_var("http.error.status_code", status.as_u16().to_string());
+                ctx.set_var(
+                    "http.error.status_text",
+                    status.canonical_reason().unwrap_or("").to_string(),
+                );
                 if ctx.get_var("err.message").is_none() {
                     ctx.set_var("err.message", format!("HTTP error {}", status.as_u16()));
+                }
+                if ctx.get_var("http.error.message").is_none() {
+                    ctx.set_var(
+                        "http.error.message",
+                        format!("HTTP error {}", status.as_u16()),
+                    );
                 }
                 true
             } else {
@@ -186,7 +228,14 @@ impl VirtualHostRouter {
         // Default 404 if no handler responded
         if !ctx.response_written {
             let st = ctx.status.unwrap_or(StatusCode::NOT_FOUND);
-            ctx.set_response(st, format!("{} {}\n", st.as_u16(), st.canonical_reason().unwrap_or("Not Found")));
+            ctx.set_response(
+                st,
+                format!(
+                    "{} {}\n",
+                    st.as_u16(),
+                    st.canonical_reason().unwrap_or("Not Found")
+                ),
+            );
         }
 
         Ok(())
@@ -292,8 +341,7 @@ fn compile_handler(h_cfg: &HandlerConfig, registry: &ModuleRegistry) -> Result<A
                 .get("status_code")
                 .and_then(|v| v.as_u64())
                 .unwrap_or(200) as u16;
-            let status_code = StatusCode::from_u16(status_code_u16)
-                .unwrap_or(StatusCode::OK);
+            let status_code = StatusCode::from_u16(status_code_u16).unwrap_or(StatusCode::OK);
 
             if let Some(loc) = h_cfg.details.get("location").and_then(|v| v.as_str()) {
                 Ok(Arc::new(RedirectHandler {
@@ -322,7 +370,12 @@ fn compile_handler(h_cfg: &HandlerConfig, registry: &ModuleRegistry) -> Result<A
         }
 
         "method" => {
-            let method = h_cfg.details.get("method").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let method = h_cfg
+                .details
+                .get("method")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
             Ok(Arc::new(raddy_core::handler::MethodHandler { method }))
         }
 
@@ -331,7 +384,11 @@ fn compile_handler(h_cfg: &HandlerConfig, registry: &ModuleRegistry) -> Result<A
                 .details
                 .get("try_files")
                 .and_then(|v| v.as_array())
-                .map(|arr| arr.iter().filter_map(|x| x.as_str().map(|s| s.to_string())).collect())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|x| x.as_str().map(|s| s.to_string()))
+                        .collect()
+                })
                 .unwrap_or_default();
             Ok(Arc::new(raddy_core::handler::TryFilesHandler { try_files }))
         }
@@ -374,7 +431,11 @@ fn compile_handler(h_cfg: &HandlerConfig, registry: &ModuleRegistry) -> Result<A
 
         "headers" => {
             let mut set_response_headers = HashMap::new();
-            if let Some(map) = h_cfg.details.get("set_response_headers").and_then(|v| v.as_object()) {
+            if let Some(map) = h_cfg
+                .details
+                .get("set_response_headers")
+                .and_then(|v| v.as_object())
+            {
                 for (k, v) in map {
                     if let Some(s) = v.as_str() {
                         set_response_headers.insert(k.clone(), s.to_string());
@@ -383,7 +444,11 @@ fn compile_handler(h_cfg: &HandlerConfig, registry: &ModuleRegistry) -> Result<A
             }
 
             let mut default_response_headers = HashMap::new();
-            if let Some(map) = h_cfg.details.get("default_response_headers").and_then(|v| v.as_object()) {
+            if let Some(map) = h_cfg
+                .details
+                .get("default_response_headers")
+                .and_then(|v| v.as_object())
+            {
                 for (k, v) in map {
                     if let Some(s) = v.as_str() {
                         default_response_headers.insert(k.clone(), s.to_string());
@@ -392,7 +457,11 @@ fn compile_handler(h_cfg: &HandlerConfig, registry: &ModuleRegistry) -> Result<A
             }
 
             let mut delete_response_headers = Vec::new();
-            if let Some(arr) = h_cfg.details.get("delete_response_headers").and_then(|v| v.as_array()) {
+            if let Some(arr) = h_cfg
+                .details
+                .get("delete_response_headers")
+                .and_then(|v| v.as_array())
+            {
                 for v in arr {
                     if let Some(s) = v.as_str() {
                         delete_response_headers.push(s.to_string());
@@ -401,7 +470,11 @@ fn compile_handler(h_cfg: &HandlerConfig, registry: &ModuleRegistry) -> Result<A
             }
 
             let mut set_request_headers = HashMap::new();
-            if let Some(map) = h_cfg.details.get("set_request_headers").and_then(|v| v.as_object()) {
+            if let Some(map) = h_cfg
+                .details
+                .get("set_request_headers")
+                .and_then(|v| v.as_object())
+            {
                 for (k, v) in map {
                     if let Some(s) = v.as_str() {
                         set_request_headers.insert(k.clone(), s.to_string());
@@ -410,7 +483,11 @@ fn compile_handler(h_cfg: &HandlerConfig, registry: &ModuleRegistry) -> Result<A
             }
 
             let mut delete_request_headers = Vec::new();
-            if let Some(arr) = h_cfg.details.get("delete_request_headers").and_then(|v| v.as_array()) {
+            if let Some(arr) = h_cfg
+                .details
+                .get("delete_request_headers")
+                .and_then(|v| v.as_array())
+            {
                 for v in arr {
                     if let Some(s) = v.as_str() {
                         delete_request_headers.push(s.to_string());
@@ -440,13 +517,25 @@ fn compile_handler(h_cfg: &HandlerConfig, registry: &ModuleRegistry) -> Result<A
         }
 
         "file_server" => {
-            let root = h_cfg.details.get("root").and_then(|v| v.as_str()).map(|s| s.to_string());
-            let browse = h_cfg.details.get("browse").and_then(|v| v.as_bool()).unwrap_or(false);
+            let root = h_cfg
+                .details
+                .get("root")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            let browse = h_cfg
+                .details
+                .get("browse")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
             let hide = h_cfg
                 .details
                 .get("hide")
                 .and_then(|v| v.as_array())
-                .map(|arr| arr.iter().filter_map(|x| x.as_str().map(|s| s.to_string())).collect())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|x| x.as_str().map(|s| s.to_string()))
+                        .collect()
+                })
                 .unwrap_or_default();
             Ok(Arc::new(FileServerHandler::new(root, browse, hide)))
         }
@@ -462,7 +551,11 @@ fn compile_handler(h_cfg: &HandlerConfig, registry: &ModuleRegistry) -> Result<A
         }
 
         "subroute" => {
-            let routes_val = h_cfg.details.get("routes").cloned().unwrap_or(serde_json::Value::Null);
+            let routes_val = h_cfg
+                .details
+                .get("routes")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null);
             let sub_routes_cfg: Vec<Route> = serde_json::from_value(routes_val)
                 .map_err(|e| CoreError::Config(format!("Invalid subroute config: {}", e)))?;
 
@@ -470,7 +563,9 @@ fn compile_handler(h_cfg: &HandlerConfig, registry: &ModuleRegistry) -> Result<A
             for r in &sub_routes_cfg {
                 compiled_subroutes.push(compile_route(r, registry)?);
             }
-            Ok(Arc::new(SubrouteHandler::new(Router::new(compiled_subroutes))))
+            Ok(Arc::new(SubrouteHandler::new(Router::new(
+                compiled_subroutes,
+            ))))
         }
 
         "encode" => {
@@ -478,13 +573,73 @@ fn compile_handler(h_cfg: &HandlerConfig, registry: &ModuleRegistry) -> Result<A
                 .details
                 .get("encodings")
                 .and_then(|v| v.as_array())
-                .map(|arr| arr.iter().filter_map(|x| x.as_str().map(|s| s.to_string())).collect())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|x| x.as_str().map(|s| s.to_string()))
+                        .collect()
+                })
                 .unwrap_or_else(|| vec!["zstd".into(), "gzip".into()]);
-            Ok(Arc::new(crate::encode::EncodeHandler::from_format_names(&encodings)))
+            Ok(Arc::new(crate::encode::EncodeHandler::from_format_names(
+                &encodings,
+            )))
         }
 
-        "templates" => {
-            Ok(Arc::new(crate::templates::TemplatesHandler::new()))
+        "templates" => Ok(Arc::new(crate::templates::TemplatesHandler::new())),
+
+        "replace" => {
+            let mut rules = Vec::new();
+            if let Some(arr) = h_cfg.details.get("replacements").and_then(|v| v.as_array()) {
+                for item in arr {
+                    let search = item
+                        .get("search")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let replace = item
+                        .get("replace")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let is_regex = item
+                        .get("is_regex")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false);
+                    let regex = if is_regex {
+                        Some(regex::Regex::new(&search).map_err(|e| {
+                            CoreError::Config(format!("Invalid replace regex '{}': {}", search, e))
+                        })?)
+                    } else {
+                        None
+                    };
+                    rules.push(crate::replace::ReplacementRule {
+                        search,
+                        replace,
+                        regex,
+                    });
+                }
+            }
+            let mut content_types = Vec::new();
+            if let Some(arr) = h_cfg
+                .details
+                .get("content_types")
+                .and_then(|v| v.as_array())
+            {
+                for item in arr {
+                    if let Some(s) = item.as_str() {
+                        content_types.push(s.to_string());
+                    }
+                }
+            }
+            let stream = h_cfg
+                .details
+                .get("stream")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            Ok(Arc::new(crate::replace::ReplaceHandler::new(
+                rules,
+                content_types,
+                stream,
+            )))
         }
 
         "basic_auth" | "authentication" => {
@@ -496,13 +651,26 @@ fn compile_handler(h_cfg: &HandlerConfig, registry: &ModuleRegistry) -> Result<A
                     }
                 }
             }
-            let realm = h_cfg.details.get("realm").and_then(|v| v.as_str()).map(|s| s.to_string());
+            let realm = h_cfg
+                .details
+                .get("realm")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
             Ok(Arc::new(crate::auth::BasicAuthHandler::new(users, realm)))
         }
 
         "forward_auth" => {
-            let upstream = h_cfg.details.get("upstream").and_then(|v| v.as_str()).unwrap_or("").to_string();
-            let uri_override = h_cfg.details.get("uri").and_then(|v| v.as_str()).map(|s| s.to_string());
+            let upstream = h_cfg
+                .details
+                .get("upstream")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let uri_override = h_cfg
+                .details
+                .get("uri")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
             let mut copy_headers = Vec::new();
             if let Some(arr) = h_cfg.details.get("copy_headers").and_then(|v| v.as_array()) {
                 for item in arr {
@@ -511,7 +679,11 @@ fn compile_handler(h_cfg: &HandlerConfig, registry: &ModuleRegistry) -> Result<A
                     }
                 }
             }
-            Ok(Arc::new(crate::auth::ForwardAuthHandler::new(upstream, uri_override, copy_headers)))
+            Ok(Arc::new(crate::auth::ForwardAuthHandler::new(
+                upstream,
+                uri_override,
+                copy_headers,
+            )))
         }
 
         "request_body" => {
@@ -521,13 +693,29 @@ fn compile_handler(h_cfg: &HandlerConfig, registry: &ModuleRegistry) -> Result<A
                 .and_then(|v| v.as_u64())
                 .map(|s| s as usize)
                 .unwrap_or(10 * 1024 * 1024);
-            Ok(Arc::new(crate::limits::RequestBodyLimitHandler::new(max_size)))
+            Ok(Arc::new(crate::limits::RequestBodyLimitHandler::new(
+                max_size,
+            )))
         }
 
         "map" => {
-            let source = h_cfg.details.get("source").and_then(|v| v.as_str()).unwrap_or("").to_string();
-            let dest = h_cfg.details.get("dest").and_then(|v| v.as_str()).unwrap_or("").to_string();
-            let default_val = h_cfg.details.get("default").and_then(|v| v.as_str()).map(|s| s.to_string());
+            let source = h_cfg
+                .details
+                .get("source")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let dest = h_cfg
+                .details
+                .get("dest")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let default_val = h_cfg
+                .details
+                .get("default")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
             let mut mappings = Vec::new();
             if let Some(arr) = h_cfg.details.get("mappings").and_then(|v| v.as_array()) {
                 for item in arr {
@@ -541,32 +729,58 @@ fn compile_handler(h_cfg: &HandlerConfig, registry: &ModuleRegistry) -> Result<A
                     }
                 }
             }
-            Ok(Arc::new(crate::map::MapHandler::new(source, dest, mappings, default_val)))
+            Ok(Arc::new(crate::map::MapHandler::new(
+                source,
+                dest,
+                mappings,
+                default_val,
+            )))
         }
 
-        "abort" => {
-            Ok(Arc::new(crate::flow::AbortHandler))
-        }
+        "abort" => Ok(Arc::new(crate::flow::AbortHandler)),
 
         "error" => {
-            let status_u16 = h_cfg.details.get("status_code").and_then(|v| v.as_u64()).unwrap_or(500) as u16;
-            let status = StatusCode::from_u16(status_u16).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-            let message = h_cfg.details.get("error").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let status_u16 = h_cfg
+                .details
+                .get("status_code")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(500) as u16;
+            let status =
+                StatusCode::from_u16(status_u16).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+            let message = h_cfg
+                .details
+                .get("error")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
             Ok(Arc::new(crate::flow::ErrorHandler::new(status, message)))
         }
 
-        "log_skip" => {
-            Ok(Arc::new(LogSkipHandler))
-        }
+        "log_skip" => Ok(Arc::new(LogSkipHandler)),
 
         "log_append" => {
-            let key = h_cfg.details.get("key").and_then(|v| v.as_str()).unwrap_or("").to_string();
-            let value = h_cfg.details.get("value").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let key = h_cfg
+                .details
+                .get("key")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let value = h_cfg
+                .details
+                .get("value")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
             Ok(Arc::new(LogAppendHandler { key, value }))
         }
 
         "log_name" => {
-            let name = h_cfg.details.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let name = h_cfg
+                .details
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
             Ok(Arc::new(LogNameHandler { name }))
         }
 
@@ -598,7 +812,8 @@ pub struct LogAppendHandler {
 impl Handler for LogAppendHandler {
     async fn handle(&self, ctx: &mut Context) -> Result<()> {
         let val_eval = raddy_core::eval_placeholders(&self.value, ctx);
-        ctx.log_appends.insert(self.key.clone(), serde_json::Value::String(val_eval));
+        ctx.log_appends
+            .insert(self.key.clone(), serde_json::Value::String(val_eval));
         Ok(())
     }
 }
@@ -626,4 +841,3 @@ impl Handler for NoopHandler {
         Ok(())
     }
 }
-

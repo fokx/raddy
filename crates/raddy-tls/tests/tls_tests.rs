@@ -1,8 +1,8 @@
-use std::sync::Arc;
 use raddy_tls::local_ca::LocalCa;
-use raddy_tls::manager::{is_local_or_private, TlsManager};
+use raddy_tls::manager::{TlsManager, is_local_or_private};
 use raddy_tls::sni::SniResolver;
-use raddy_tls::storage::{parse_certified_key, CertStorage, FileCertStorage};
+use raddy_tls::storage::{CertStorage, FileCertStorage, parse_certified_key};
+use std::sync::Arc;
 
 #[tokio::test]
 async fn test_local_ca_generation() {
@@ -18,7 +18,8 @@ async fn test_local_ca_generation() {
     assert!(cert_pem.contains("BEGIN CERTIFICATE"));
     assert!(key_pem.contains("BEGIN PRIVATE KEY"));
 
-    let certified_key = parse_certified_key(&cert_pem, &key_pem).expect("Failed to parse certified key");
+    let certified_key =
+        parse_certified_key(&cert_pem, &key_pem).expect("Failed to parse certified key");
     assert!(!certified_key.as_ref().cert.is_empty());
 }
 
@@ -37,7 +38,11 @@ async fn test_file_cert_storage() {
 
     assert!(storage.exists(identifier).await);
 
-    let loaded = storage.load(identifier).await.expect("Failed to load").expect("Cert not found");
+    let loaded = storage
+        .load(identifier)
+        .await
+        .expect("Failed to load")
+        .expect("Cert not found");
     assert_eq!(loaded.0, "CERT_CONTENT");
     assert_eq!(loaded.1, "KEY_CONTENT");
 
@@ -97,7 +102,9 @@ async fn test_tls_manager_provision_internal() {
     assert_eq!(manager.sni_resolver().cert_count(), 1);
 
     // Build ServerConfig & TlsAcceptor
-    let _acceptor = manager.build_tls_acceptor().expect("Failed to build TLS acceptor");
+    let _acceptor = manager
+        .build_tls_acceptor()
+        .expect("Failed to build TLS acceptor");
 
     let _ = tokio::fs::remove_dir_all(&temp_dir).await;
 }
@@ -185,9 +192,9 @@ async fn test_caddy_compatibility_and_account_storage() {
 
 #[tokio::test]
 async fn test_tls_alpn_challenge_cert_generation_and_sni_resolution() {
-    use rcgen::{CertificateParams, CustomExtension, KeyPair, PKCS_ECDSA_P256_SHA256, SanType};
-    use ring::digest::{digest, SHA256};
     use raddy_tls::ChallengeTypePreference;
+    use rcgen::{CertificateParams, CustomExtension, KeyPair, PKCS_ECDSA_P256_SHA256, SanType};
+    use ring::digest::{SHA256, digest};
 
     // Simulate ACME key authorization and SHA-256 digest calculation (RFC 8737 §3)
     let domain = "ams.eeeu.de";
@@ -222,10 +229,15 @@ async fn test_tls_alpn_challenge_cert_generation_and_sni_resolution() {
 
     // Test TlsManager default challenge preference is TlsAlpnFirst
     let manager = TlsManager::new(None, true).unwrap();
-    assert_eq!(manager.challenge_preference(), ChallengeTypePreference::TlsAlpnFirst);
+    assert_eq!(
+        manager.challenge_preference(),
+        ChallengeTypePreference::TlsAlpnFirst
+    );
 
     // Test with_challenge_preference
     let manager = manager.with_challenge_preference(ChallengeTypePreference::TlsAlpnOnly);
-    assert_eq!(manager.challenge_preference(), ChallengeTypePreference::TlsAlpnOnly);
+    assert_eq!(
+        manager.challenge_preference(),
+        ChallengeTypePreference::TlsAlpnOnly
+    );
 }
-

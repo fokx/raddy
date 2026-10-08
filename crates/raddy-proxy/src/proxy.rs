@@ -1,14 +1,14 @@
-use std::sync::Arc;
-use async_trait::async_trait;
-use http::StatusCode;
-use raddy_core::context::Context;
-use raddy_core::error::Result;
-use raddy_core::handler::Handler;
 use crate::headers::HeaderMutator;
 use crate::health::PassiveHealthConfig;
 use crate::load_balancer::LoadBalancer;
 use crate::transport::HttpTransport;
 use crate::upstream::Upstream;
+use async_trait::async_trait;
+use http::StatusCode;
+use raddy_core::context::Context;
+use raddy_core::error::Result;
+use raddy_core::handler::Handler;
+use std::sync::Arc;
 
 /// Reverse Proxy Handler implementing Caddy's `reverse_proxy` directive.
 pub struct ReverseProxyHandler {
@@ -43,6 +43,11 @@ impl ReverseProxyHandler {
 
     pub fn with_passive_health(mut self, config: PassiveHealthConfig) -> Self {
         self.passive_health = config;
+        self
+    }
+
+    pub fn with_transport(mut self, transport: HttpTransport) -> Self {
+        self.transport = transport;
         self
     }
 }
@@ -94,6 +99,24 @@ impl Handler for ReverseProxyHandler {
             upstream.inc_active();
             let _guard = ActiveGuard(upstream.as_ref());
 
+            // Set upstream placeholders in context
+            let host_header = if (upstream.is_tls && upstream.port == 443)
+                || (!upstream.is_tls && upstream.port == 80)
+            {
+                upstream.host.clone()
+            } else {
+                upstream.dial.clone()
+            };
+            ctx.set_var("upstream_hostport", host_header.clone());
+            ctx.set_var("http.reverse_proxy.upstream.hostport", host_header.clone());
+            ctx.set_var("upstream_host", upstream.host.clone());
+            ctx.set_var("http.reverse_proxy.upstream.host", upstream.host.clone());
+            ctx.set_var("upstream_port", upstream.port.to_string());
+            ctx.set_var(
+                "http.reverse_proxy.upstream.port",
+                upstream.port.to_string(),
+            );
+
             // 3. Mutate request headers (header_up + X-Forwarded-*)
             let mut req_headers = ctx.headers.clone();
             self.mutator.apply_header_up(&mut req_headers, ctx);
@@ -102,8 +125,9 @@ impl Handler for ReverseProxyHandler {
             let dial = upstream.dial.clone();
             let result = self
                 .transport
-                .round_trip(
+                .round_trip_with_tls(
                     &dial,
+                    upstream.is_tls || self.transport.tls,
                     ctx.method.clone(),
                     &ctx.uri,
                     req_headers,

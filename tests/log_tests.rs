@@ -1,10 +1,10 @@
-use std::fs::File;
-use std::io::{BufRead, BufReader};
-use std::time::Duration;
-use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, COOKIE};
 use raddy_caddyfile::{Adapter, Lexer, Parser};
 use raddy_core::module::ModuleRegistry;
 use raddy_http::ServerManager;
+use reqwest::header::{AUTHORIZATION, COOKIE, HeaderMap, HeaderValue};
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::time::Duration;
 
 fn parse_and_adapt(input: &str) -> raddy_core::Config {
     let tokens = Lexer::new(input).tokenize().unwrap();
@@ -37,7 +37,9 @@ async fn test_live_access_logging_and_redaction() {
 
     let config = parse_and_adapt(&caddyfile);
     let registry = ModuleRegistry::new();
-    let mut manager = ServerManager::from_config(&config, &registry, None).await.unwrap();
+    let mut manager = ServerManager::from_config(&config, &registry, None)
+        .await
+        .unwrap();
     manager.bind_all().await.unwrap();
 
     let (_join_set, shutdown_tx) = manager.spawn_all();
@@ -48,8 +50,14 @@ async fn test_live_access_logging_and_redaction() {
     // Send HTTP request with sensitive headers
     let client = reqwest::Client::new();
     let mut headers = HeaderMap::new();
-    headers.insert(COOKIE, HeaderValue::from_static("session_id=secret123; tracking=abc"));
-    headers.insert(AUTHORIZATION, HeaderValue::from_static("Bearer super_secret_token"));
+    headers.insert(
+        COOKIE,
+        HeaderValue::from_static("session_id=secret123; tracking=abc"),
+    );
+    headers.insert(
+        AUTHORIZATION,
+        HeaderValue::from_static("Bearer super_secret_token"),
+    );
     headers.insert("X-Custom", HeaderValue::from_static("public_data"));
 
     let resp = client
@@ -81,7 +89,10 @@ async fn test_live_access_logging_and_redaction() {
     // Verify sensitive headers are REDACTED by default
     let req_headers = &entry["request"]["headers"];
     assert_eq!(req_headers["Cookie"], serde_json::json!(["REDACTED"]));
-    assert_eq!(req_headers["Authorization"], serde_json::json!(["REDACTED"]));
+    assert_eq!(
+        req_headers["Authorization"],
+        serde_json::json!(["REDACTED"])
+    );
     assert_eq!(req_headers["X-Custom"], serde_json::json!(["public_data"]));
 
     // Graceful shutdown
@@ -90,7 +101,8 @@ async fn test_live_access_logging_and_redaction() {
 
 #[tokio::test]
 async fn test_live_log_skip_and_log_append() {
-    let tmp_dir = std::env::temp_dir().join(format!("raddy_log_skip_append_{}", std::process::id()));
+    let tmp_dir =
+        std::env::temp_dir().join(format!("raddy_log_skip_append_{}", std::process::id()));
     let _ = std::fs::create_dir_all(&tmp_dir);
     let log_file = tmp_dir.join("skip_append.log");
     let log_path_str = log_file.to_str().unwrap().replace('\\', "/");
@@ -116,7 +128,9 @@ async fn test_live_log_skip_and_log_append() {
 
     let config = parse_and_adapt(&caddyfile);
     let registry = ModuleRegistry::new();
-    let mut manager = ServerManager::from_config(&config, &registry, None).await.unwrap();
+    let mut manager = ServerManager::from_config(&config, &registry, None)
+        .await
+        .unwrap();
     manager.bind_all().await.unwrap();
 
     let (_join_set, shutdown_tx) = manager.spawn_all();
@@ -125,7 +139,11 @@ async fn test_live_log_skip_and_log_append() {
     let client = reqwest::Client::new();
 
     // 1. Request to /health should be SKIPPED from logging
-    let resp1 = client.get("http://127.0.0.1:29102/health").send().await.unwrap();
+    let resp1 = client
+        .get("http://127.0.0.1:29102/health")
+        .send()
+        .await
+        .unwrap();
     assert_eq!(resp1.status(), 200);
 
     // 2. Request to /app should be LOGGED with appended fields
@@ -185,7 +203,9 @@ async fn test_live_filter_encoder() {
 
     let config = parse_and_adapt(&caddyfile);
     let registry = ModuleRegistry::new();
-    let mut manager = ServerManager::from_config(&config, &registry, None).await.unwrap();
+    let mut manager = ServerManager::from_config(&config, &registry, None)
+        .await
+        .unwrap();
     manager.bind_all().await.unwrap();
 
     let (_join_set, shutdown_tx) = manager.spawn_all();
@@ -249,7 +269,9 @@ async fn test_live_log_rolling_and_compression() {
 
     let config = parse_and_adapt(&caddyfile);
     let registry = ModuleRegistry::new();
-    let mut manager = ServerManager::from_config(&config, &registry, None).await.unwrap();
+    let mut manager = ServerManager::from_config(&config, &registry, None)
+        .await
+        .unwrap();
     manager.bind_all().await.unwrap();
 
     let (_join_set, shutdown_tx) = manager.spawn_all();
@@ -259,7 +281,11 @@ async fn test_live_log_rolling_and_compression() {
 
     // Each access log is ~400-500 bytes. With roll_size 200b, multiple requests will trigger log rolling!
     for _ in 0..5 {
-        let resp = client.get("http://127.0.0.1:29104/test").send().await.unwrap();
+        let resp = client
+            .get("http://127.0.0.1:29104/test")
+            .send()
+            .await
+            .unwrap();
         assert_eq!(resp.status(), 200);
         tokio::time::sleep(Duration::from_millis(50)).await;
     }

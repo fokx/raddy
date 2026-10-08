@@ -1,11 +1,11 @@
+use crate::error::{ProxyError, Result};
+use ipnet::IpNet;
+use serde::{Deserialize, Serialize};
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::net::IpAddr;
 use std::path::Path;
 use std::str::FromStr;
-use ipnet::IpNet;
-use serde::{Deserialize, Serialize};
-use crate::error::{ProxyError, Result};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AclDecision {
@@ -96,12 +96,14 @@ pub fn new_acl_rule(subject: &str, allow: bool) -> Result<AclRule> {
     // Try parsing as single IP
     if let Ok(ip) = IpAddr::from_str(subject) {
         let net = match ip {
-            IpAddr::V4(v4) => IpNet::V4(ipnet::Ipv4Net::new(v4, 32).map_err(|e| {
-                ProxyError::Core(raddy_core::CoreError::Config(e.to_string()))
-            })?),
-            IpAddr::V6(v6) => IpNet::V6(ipnet::Ipv6Net::new(v6, 128).map_err(|e| {
-                ProxyError::Core(raddy_core::CoreError::Config(e.to_string()))
-            })?),
+            IpAddr::V4(v4) => IpNet::V4(
+                ipnet::Ipv4Net::new(v4, 32)
+                    .map_err(|e| ProxyError::Core(raddy_core::CoreError::Config(e.to_string())))?,
+            ),
+            IpAddr::V6(v6) => IpNet::V6(
+                ipnet::Ipv6Net::new(v6, 128)
+                    .map_err(|e| ProxyError::Core(raddy_core::CoreError::Config(e.to_string())))?,
+            ),
         };
         return Ok(AclRule::Ip { net, allow });
     }

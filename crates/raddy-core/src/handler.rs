@@ -1,10 +1,10 @@
+use crate::context::Context;
+use crate::error::Result;
+use crate::placeholder::eval_placeholders;
 use async_trait::async_trait;
 use http::StatusCode;
 use std::collections::HashMap;
 use std::sync::Arc;
-use crate::context::Context;
-use crate::error::Result;
-use crate::placeholder::eval_placeholders;
 
 /// Async request handler interface.
 #[async_trait]
@@ -101,7 +101,11 @@ impl Handler for RewriteHandler {
             }
         }
 
-        let mut query = ctx.uri.query().map(|q| format!("?{}", q)).unwrap_or_default();
+        let mut query = ctx
+            .uri
+            .query()
+            .map(|q| format!("?{}", q))
+            .unwrap_or_default();
 
         if let Some(ref tmpl) = self.uri_template {
             let evaluated = eval_placeholders(tmpl, ctx);
@@ -158,8 +162,17 @@ impl Handler for TryFilesHandler {
                     let status = StatusCode::from_u16(code).unwrap_or(StatusCode::NOT_FOUND);
                     ctx.status = Some(status);
                     ctx.set_var("err.status_code", code.to_string());
-                    ctx.set_var("err.status_text", status.canonical_reason().unwrap_or("").to_string());
+                    ctx.set_var(
+                        "err.status_text",
+                        status.canonical_reason().unwrap_or("").to_string(),
+                    );
                     ctx.set_var("err.message", format!("HTTP error {}", code));
+                    ctx.set_var("http.error.status_code", code.to_string());
+                    ctx.set_var(
+                        "http.error.status_text",
+                        status.canonical_reason().unwrap_or("").to_string(),
+                    );
+                    ctx.set_var("http.error.message", format!("HTTP error {}", code));
                     return Ok(());
                 }
             }
@@ -182,7 +195,10 @@ impl Handler for TryFilesHandler {
                 let new_query = if let Some(q) = query_part {
                     format!("?{}", q)
                 } else {
-                    ctx.uri.query().map(|q| format!("?{}", q)).unwrap_or_default()
+                    ctx.uri
+                        .query()
+                        .map(|q| format!("?{}", q))
+                        .unwrap_or_default()
                 };
                 let new_uri_str = format!("{}{}", file_part, new_query);
                 if let Ok(new_uri) = new_uri_str.parse::<http::Uri>() {
@@ -213,7 +229,9 @@ impl Handler for HeadersHandler {
         for name in &self.delete_request_headers {
             if name.contains('*') {
                 let pat = name.to_lowercase();
-                let to_remove: Vec<_> = ctx.headers.keys()
+                let to_remove: Vec<_> = ctx
+                    .headers
+                    .keys()
                     .filter(|k| glob_match_hdr(&pat, k.as_str()))
                     .cloned()
                     .collect();
@@ -238,7 +256,9 @@ impl Handler for HeadersHandler {
         for name in &self.delete_response_headers {
             if name.contains('*') {
                 let pat = name.to_lowercase();
-                let to_remove: Vec<_> = ctx.response_headers.keys()
+                let to_remove: Vec<_> = ctx
+                    .response_headers
+                    .keys()
                     .filter(|k| glob_match_hdr(&pat, k.as_str()))
                     .cloned()
                     .collect();
@@ -292,7 +312,6 @@ fn glob_match_hdr(pat: &str, s: &str) -> bool {
         s == pat
     }
 }
-
 
 /// Sets custom variables in the request context (for `vars`).
 #[derive(Debug, Clone)]

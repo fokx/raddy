@@ -1,7 +1,7 @@
-use std::collections::HashMap;
-use raddy_core::config::*;
 use crate::ast::*;
 use crate::error::{ParseError, ParseResult};
+use raddy_core::config::*;
+use std::collections::HashMap;
 
 pub const DEFAULT_HTTP_PORT: u16 = 80;
 pub const DEFAULT_HTTPS_PORT: u16 = 443;
@@ -50,10 +50,9 @@ pub const DIRECTIVE_ORDER: &[&str] = &[
     "forward_proxy",
     "acme_server",
     "templates",
+    "replace",
     "encode",
 ];
-
-
 
 pub struct Adapter {
     http_port: u16,
@@ -147,7 +146,11 @@ impl Adapter {
         config.logging = self.logging.clone();
 
         // 3. Automatic HTTPS: generate port 80 server for HTTP->HTTPS redirects and ACME HTTP-01 challenges
-        let auto_https_disabled = self.auto_https.as_ref().and_then(|a| a.disabled).unwrap_or(false);
+        let auto_https_disabled = self
+            .auto_https
+            .as_ref()
+            .and_then(|a| a.disabled)
+            .unwrap_or(false);
         if !auto_https_disabled {
             self.setup_automatic_https(&mut servers);
         }
@@ -156,10 +159,12 @@ impl Adapter {
         self.apply_server_options(&mut servers)?;
 
         let http_app = HttpApp { servers };
-        config.set_http_app(http_app).map_err(|e| ParseError::Adaptation {
-            line: 1,
-            message: format!("Failed to serialize HTTP app: {}", e),
-        })?;
+        config
+            .set_http_app(http_app)
+            .map_err(|e| ParseError::Adaptation {
+                line: 1,
+                message: format!("Failed to serialize HTTP app: {}", e),
+            })?;
 
         if self.email.is_some()
             || self.acme_ca.is_some()
@@ -237,7 +242,8 @@ impl Adapter {
                         } else if pos == "before" && opt.args.len() >= 3 {
                             let target = &opt.args[2];
                             let target_prio = self.custom_order.get(target).copied().unwrap_or(500);
-                            self.custom_order.insert(dir.clone(), target_prio.saturating_sub(1));
+                            self.custom_order
+                                .insert(dir.clone(), target_prio.saturating_sub(1));
                         } else if pos == "after" && opt.args.len() >= 3 {
                             let target = &opt.args[2];
                             let target_prio = self.custom_order.get(target).copied().unwrap_or(500);
@@ -282,7 +288,11 @@ impl Adapter {
                     default_log.level = Some("DEBUG".to_string());
                 }
                 "log" => {
-                    let log_name = opt.args.first().cloned().unwrap_or_else(|| "default".to_string());
+                    let log_name = opt
+                        .args
+                        .first()
+                        .cloned()
+                        .unwrap_or_else(|| "default".to_string());
                     let log_cfg = parse_log_directive(opt, &log_name)?;
                     let logging = self.logging.get_or_insert_with(LoggingConfig::default);
                     logging.logs.insert(log_name, log_cfg);
@@ -307,7 +317,11 @@ impl Adapter {
                                     }
                                 }
                                 "strict_sni_host" => {
-                                    let val = sub.args.first().map(|s| s.as_str() != "insecure_off").unwrap_or(true);
+                                    let val = sub
+                                        .args
+                                        .first()
+                                        .map(|s| s.as_str() != "insecure_off")
+                                        .unwrap_or(true);
                                     srv_opt.strict_sni_host = Some(val);
                                 }
                                 _ => {}
@@ -337,9 +351,10 @@ impl Adapter {
         for (srv_name, server) in servers.iter_mut() {
             for opt in &sorted_opts {
                 let matches = match &opt.listener_address {
-                    Some(addr) => {
-                        server.listen.iter().any(|l| l == addr || l.ends_with(addr) || addr.ends_with(l))
-                    }
+                    Some(addr) => server
+                        .listen
+                        .iter()
+                        .any(|l| l == addr || l.ends_with(addr) || addr.ends_with(l)),
                     None => true,
                 };
 
@@ -399,7 +414,8 @@ impl Adapter {
                                 }
                             } else if let Some(chs) = t.strip_prefix("challenges:") {
                                 if self.challenges.is_none() {
-                                    self.challenges = Some(chs.split(',').map(|s| s.to_string()).collect());
+                                    self.challenges =
+                                        Some(chs.split(',').map(|s| s.to_string()).collect());
                                 }
                             } else if t == "disable_http_challenge" {
                                 self.disable_http_challenge = Some(true);
@@ -476,11 +492,12 @@ impl Adapter {
         // Directives with matchers sort before fallback handle directives without matchers.
         regular_directives.sort_by_key(|dir| {
             let prio = self.custom_order.get(&dir.name).copied().unwrap_or(500);
-            let is_fallback_handle = if dir.name == "handle" && dir.matcher.is_none() && dir.args.is_empty() {
-                1
-            } else {
-                0
-            };
+            let is_fallback_handle =
+                if dir.name == "handle" && dir.matcher.is_none() && dir.args.is_empty() {
+                    1
+                } else {
+                    0
+                };
             (prio, is_fallback_handle)
         });
 
@@ -493,7 +510,10 @@ impl Adapter {
                 } else {
                     ":80"
                 };
-                site_bind_hosts.iter().map(|h| format!("{}{}", h, port_str)).collect::<Vec<_>>()
+                site_bind_hosts
+                    .iter()
+                    .map(|h| format!("{}{}", h, port_str))
+                    .collect::<Vec<_>>()
             } else {
                 vec![parsed_addr.listen.clone()]
             };
@@ -552,7 +572,12 @@ impl Adapter {
 
             // Translate directives into Route handlers
             for dir in &regular_directives {
-                let mut route = self.adapt_directive(dir, &host_matchers, path_matcher.as_deref(), &named_matchers)?;
+                let mut route = self.adapt_directive(
+                    dir,
+                    &host_matchers,
+                    path_matcher.as_deref(),
+                    &named_matchers,
+                )?;
                 if dir.name == "handle" || dir.name == "handle_path" {
                     route.group = Some(handle_group_id.clone());
                 }
@@ -573,10 +598,39 @@ impl Adapter {
                         }]);
                     }
                     if let Some(ref block) = dir.block {
+                        let mut local_named_matchers = named_matchers.clone();
+                        let mut sub_directives = Vec::new();
                         for sub in block {
-                            let mut sub_route = self.adapt_directive(sub, &host_matchers, None, &named_matchers)?;
-                            if matchers.is_some() {
-                                sub_route.r#match = matchers.clone();
+                            if sub.name.starts_with('@') {
+                                let name = sub.name.clone();
+                                let matcher_set = parse_named_matcher_block(sub)?;
+                                local_named_matchers.insert(name, matcher_set);
+                            } else {
+                                sub_directives.push(sub.clone());
+                            }
+                        }
+                        sub_directives.sort_by_key(|sub| {
+                            self.custom_order.get(&sub.name).copied().unwrap_or(500)
+                        });
+                        for sub in &sub_directives {
+                            let mut sub_route = self.adapt_directive(
+                                sub,
+                                &host_matchers,
+                                None,
+                                &local_named_matchers,
+                            )?;
+                            if let Some(ref m) = matchers {
+                                if let Some(ref mut existing_matches) = sub_route.r#match {
+                                    for em in existing_matches.iter_mut() {
+                                        if let Some(ref vm) = m[0].vars {
+                                            let existing_vars =
+                                                em.vars.get_or_insert_with(HashMap::new);
+                                            existing_vars.extend(vm.clone());
+                                        }
+                                    }
+                                } else {
+                                    sub_route.r#match = matchers.clone();
+                                }
                             }
                             errors_cfg.routes.push(sub_route);
                         }
@@ -630,12 +684,16 @@ impl Adapter {
             route.r#match = Some(vec![matcher_set]);
         }
 
-        let handlers = self.build_handler_config(dir)?;
+        let handlers = self.build_handler_config(dir, named_matchers)?;
         route.handle = handlers;
         Ok(route)
     }
 
-    fn build_handler_config(&self, dir: &DirectiveNode) -> ParseResult<Vec<HandlerConfig>> {
+    fn build_handler_config(
+        &self,
+        dir: &DirectiveNode,
+        named_matchers: &HashMap<String, MatcherSet>,
+    ) -> ParseResult<Vec<HandlerConfig>> {
         let mut configs = Vec::new();
 
         match dir.name.as_str() {
@@ -727,8 +785,9 @@ impl Adapter {
                         }
                         "replace" => {
                             if dir.args.len() >= 3 {
-                                cfg = cfg.with_field("search", &dir.args[1])
-                                         .with_field("replace", &dir.args[2]);
+                                cfg = cfg
+                                    .with_field("search", &dir.args[1])
+                                    .with_field("replace", &dir.args[2]);
                             }
                         }
                         _ => {}
@@ -778,7 +837,11 @@ impl Adapter {
             }
 
             "php_fastcgi" => {
-                let try_files = vec!["{path}".to_string(), "{path}/index.php".to_string(), "index.php".to_string()];
+                let try_files = vec![
+                    "{path}".to_string(),
+                    "{path}/index.php".to_string(),
+                    "index.php".to_string(),
+                ];
                 configs.push(HandlerConfig::new("try_files").with_field("try_files", try_files));
 
                 let mut upstreams = Vec::new();
@@ -806,57 +869,84 @@ impl Adapter {
                 let mut default_headers = HashMap::new();
                 let mut delete_headers = Vec::new();
 
-                let process_header_item = |name: &str, args: &[String], set_map: &mut HashMap<String, String>, def_map: &mut HashMap<String, String>, del_list: &mut Vec<String>| {
-                    if let Some(stripped) = name.strip_prefix('-') {
-                        del_list.push(stripped.to_string());
-                    } else if let Some(stripped) = name.strip_prefix('?') {
-                        if !args.is_empty() {
-                            def_map.insert(stripped.to_string(), args.join(" "));
+                let process_header_item =
+                    |name: &str,
+                     args: &[String],
+                     set_map: &mut HashMap<String, String>,
+                     def_map: &mut HashMap<String, String>,
+                     del_list: &mut Vec<String>| {
+                        if let Some(stripped) = name.strip_prefix('-') {
+                            del_list.push(stripped.to_string());
+                        } else if let Some(stripped) = name.strip_prefix('?') {
+                            if !args.is_empty() {
+                                def_map.insert(stripped.to_string(), args.join(" "));
+                            }
+                        } else if !args.is_empty() {
+                            let clean_name = name.strip_prefix('+').unwrap_or(name);
+                            set_map.insert(clean_name.to_string(), args.join(" "));
                         }
-                    } else if !args.is_empty() {
-                        let clean_name = name.strip_prefix('+').unwrap_or(name);
-                        set_map.insert(clean_name.to_string(), args.join(" "));
-                    }
-                };
+                    };
 
                 if let Some(name) = dir.args.first() {
-                    process_header_item(name, &dir.args[1..], &mut set_headers, &mut default_headers, &mut delete_headers);
+                    process_header_item(
+                        name,
+                        &dir.args[1..],
+                        &mut set_headers,
+                        &mut default_headers,
+                        &mut delete_headers,
+                    );
                 }
 
                 if let Some(ref block) = dir.block {
                     for sub in block {
-                        process_header_item(&sub.name, &sub.args, &mut set_headers, &mut default_headers, &mut delete_headers);
+                        process_header_item(
+                            &sub.name,
+                            &sub.args,
+                            &mut set_headers,
+                            &mut default_headers,
+                            &mut delete_headers,
+                        );
                     }
                 }
 
                 let mut cfg = HandlerConfig::new("headers");
                 if is_request {
-                    cfg = cfg.with_field("set_request_headers", set_headers)
-                             .with_field("default_request_headers", default_headers)
-                             .with_field("delete_request_headers", delete_headers);
+                    cfg = cfg
+                        .with_field("set_request_headers", set_headers)
+                        .with_field("default_request_headers", default_headers)
+                        .with_field("delete_request_headers", delete_headers);
                 } else {
-                    cfg = cfg.with_field("set_response_headers", set_headers)
-                             .with_field("default_response_headers", default_headers)
-                             .with_field("delete_response_headers", delete_headers);
+                    cfg = cfg
+                        .with_field("set_response_headers", set_headers)
+                        .with_field("default_response_headers", default_headers)
+                        .with_field("delete_response_headers", delete_headers);
                 }
                 configs.push(cfg);
             }
 
             "reverse_proxy" => {
                 let mut upstreams = Vec::new();
+                let mut has_https_upstream = false;
                 for arg in &dir.args {
+                    if arg.starts_with("https://") {
+                        has_https_upstream = true;
+                    }
                     upstreams.push(json_upstream(arg));
                 }
 
                 let mut lb_policy = "random".to_string();
                 let mut header_up = HashMap::new();
                 let mut header_down = HashMap::new();
+                let mut transport_tls: Option<serde_json::Value> = None;
 
                 if let Some(ref block) = dir.block {
                     for sub in block {
                         match sub.name.as_str() {
                             "to" => {
                                 for arg in &sub.args {
+                                    if arg.starts_with("https://") {
+                                        has_https_upstream = true;
+                                    }
                                     upstreams.push(json_upstream(arg));
                                 }
                             }
@@ -872,7 +962,41 @@ impl Adapter {
                             }
                             "header_down" => {
                                 if sub.args.len() >= 2 {
-                                    header_down.insert(sub.args[0].clone(), sub.args[1..].join(" "));
+                                    header_down
+                                        .insert(sub.args[0].clone(), sub.args[1..].join(" "));
+                                }
+                            }
+                            "transport" => {
+                                let mut tls_obj = serde_json::Map::new();
+                                let mut is_tls = false;
+                                if let Some(ref trans_block) = sub.block {
+                                    for t_sub in trans_block {
+                                        match t_sub.name.as_str() {
+                                            "tls" => {
+                                                is_tls = true;
+                                            }
+                                            "tls_server_name" => {
+                                                is_tls = true;
+                                                if let Some(sn) = t_sub.args.first() {
+                                                    tls_obj.insert(
+                                                        "server_name".to_string(),
+                                                        serde_json::Value::String(sn.clone()),
+                                                    );
+                                                }
+                                            }
+                                            "tls_insecure_skip_verify" => {
+                                                is_tls = true;
+                                                tls_obj.insert(
+                                                    "insecure_skip_verify".to_string(),
+                                                    serde_json::Value::Bool(true),
+                                                );
+                                            }
+                                            _ => {}
+                                        }
+                                    }
+                                }
+                                if is_tls || sub.args.iter().any(|a| a == "tls") {
+                                    transport_tls = Some(serde_json::Value::Object(tls_obj));
                                 }
                             }
                             _ => {}
@@ -880,13 +1004,29 @@ impl Adapter {
                     }
                 }
 
-                let cfg = HandlerConfig::new("reverse_proxy")
+                if transport_tls.is_none() && has_https_upstream {
+                    transport_tls = Some(serde_json::json!({}));
+                }
+
+                let mut cfg = HandlerConfig::new("reverse_proxy")
                     .with_field("upstreams", upstreams)
                     .with_field("lb_policy", lb_policy)
-                    .with_field("headers", serde_json::json!({
-                        "request": { "set": header_up },
-                        "response": { "set": header_down }
-                    }));
+                    .with_field(
+                        "headers",
+                        serde_json::json!({
+                            "request": { "set": header_up },
+                            "response": { "set": header_down }
+                        }),
+                    );
+                if let Some(tls) = transport_tls {
+                    cfg = cfg.with_field(
+                        "transport",
+                        serde_json::json!({
+                            "protocol": "http",
+                            "tls": tls
+                        }),
+                    );
+                }
                 configs.push(cfg);
             }
 
@@ -948,8 +1088,8 @@ impl Adapter {
                                 if sub.args.len() == 2 {
                                     let user = &sub.args[0];
                                     let pass = &sub.args[1];
-                                    use base64::engine::general_purpose::STANDARD as BASE64;
                                     use base64::Engine;
+                                    use base64::engine::general_purpose::STANDARD as BASE64;
                                     let cred = BASE64.encode(format!("{}:{}", user, pass));
                                     basic_auth.push(cred);
                                 }
@@ -980,7 +1120,9 @@ impl Adapter {
                                 }));
                             }
                             "serve_pac" => {
-                                let pac = sub.matcher.clone()
+                                let pac = sub
+                                    .matcher
+                                    .clone()
                                     .or_else(|| sub.args.first().cloned())
                                     .unwrap_or_else(|| "/proxy.pac".to_string());
                                 serve_pac = Some(pac);
@@ -1026,7 +1168,10 @@ impl Adapter {
                                                 }));
                                             }
                                             "allow_file" => {
-                                                let file_path = acl_dir.matcher.clone().or_else(|| acl_dir.args.first().cloned());
+                                                let file_path = acl_dir
+                                                    .matcher
+                                                    .clone()
+                                                    .or_else(|| acl_dir.args.first().cloned());
                                                 if let Some(path) = file_path {
                                                     if let Ok(lines) = read_file_lines(&path) {
                                                         acl.push(serde_json::json!({
@@ -1037,7 +1182,10 @@ impl Adapter {
                                                 }
                                             }
                                             "deny_file" => {
-                                                let file_path = acl_dir.matcher.clone().or_else(|| acl_dir.args.first().cloned());
+                                                let file_path = acl_dir
+                                                    .matcher
+                                                    .clone()
+                                                    .or_else(|| acl_dir.args.first().cloned());
                                                 if let Some(path) = file_path {
                                                     if let Ok(lines) = read_file_lines(&path) {
                                                         acl.push(serde_json::json!({
@@ -1100,6 +1248,77 @@ impl Adapter {
                 configs.push(cfg);
             }
 
+            "replace" => {
+                let mut replacements = Vec::new();
+                let mut stream = false;
+                let mut content_types = Vec::new();
+
+                // 1. Check inline arguments
+                if !dir.args.is_empty() {
+                    let mut args_idx = 0;
+                    if dir.args[args_idx] == "stream" {
+                        stream = true;
+                        args_idx += 1;
+                    }
+                    if dir.args.len() > args_idx {
+                        if dir.args[args_idx] == "re" && dir.args.len() >= args_idx + 3 {
+                            replacements.push(serde_json::json!({
+                                "search": dir.args[args_idx + 1],
+                                "replace": dir.args[args_idx + 2],
+                                "is_regex": true,
+                            }));
+                        } else if dir.args.len() >= args_idx + 2 {
+                            replacements.push(serde_json::json!({
+                                "search": dir.args[args_idx],
+                                "replace": dir.args[args_idx + 1],
+                                "is_regex": false,
+                            }));
+                        }
+                    }
+                }
+
+                // 2. Check block arguments
+                if let Some(ref block) = dir.block {
+                    for sub in block {
+                        if sub.name == "stream" {
+                            stream = true;
+                        } else if sub.name == "match" {
+                            if let Some(ref mblock) = sub.block {
+                                for msub in mblock {
+                                    if msub.name == "header"
+                                        && msub.args.len() >= 2
+                                        && msub.args[0].eq_ignore_ascii_case("content-type")
+                                    {
+                                        content_types.push(msub.args[1].clone());
+                                    }
+                                }
+                            }
+                        } else if sub.name == "re" {
+                            if sub.args.len() >= 2 {
+                                replacements.push(serde_json::json!({
+                                    "search": sub.args[0],
+                                    "replace": sub.args[1],
+                                    "is_regex": true,
+                                }));
+                            }
+                        } else {
+                            if let Some(rep) = sub.args.first() {
+                                replacements.push(serde_json::json!({
+                                    "search": sub.name.clone(),
+                                    "replace": rep.clone(),
+                                    "is_regex": false,
+                                }));
+                            }
+                        }
+                    }
+                }
+
+                let cfg = HandlerConfig::new("replace")
+                    .with_field("replacements", replacements)
+                    .with_field("stream", stream)
+                    .with_field("content_types", content_types);
+                configs.push(cfg);
+            }
 
             "encode" => {
                 let mut encodings = Vec::new();
@@ -1118,9 +1337,20 @@ impl Adapter {
             "route" => {
                 // Route block preserves exact sequence of subdirectives
                 if let Some(ref block) = dir.block {
-                    let mut sub_routes = Vec::new();
+                    let mut local_named_matchers = named_matchers.clone();
+                    let mut sub_directives = Vec::new();
                     for sub in block {
-                        let r = self.adapt_directive(sub, &[], None, &HashMap::new())?;
+                        if sub.name.starts_with('@') {
+                            let name = sub.name.clone();
+                            let matcher_set = parse_named_matcher_block(sub)?;
+                            local_named_matchers.insert(name, matcher_set);
+                        } else {
+                            sub_directives.push(sub.clone());
+                        }
+                    }
+                    let mut sub_routes = Vec::new();
+                    for sub in &sub_directives {
+                        let r = self.adapt_directive(sub, &[], None, &local_named_matchers)?;
                         sub_routes.push(r);
                     }
                     let cfg = HandlerConfig::new("subroute").with_field("routes", sub_routes);
@@ -1130,13 +1360,23 @@ impl Adapter {
 
             "handle" => {
                 if let Some(ref block) = dir.block {
-                    let mut sorted_block = block.clone();
-                    sorted_block.sort_by_key(|sub| {
+                    let mut local_named_matchers = named_matchers.clone();
+                    let mut sub_directives = Vec::new();
+                    for sub in block {
+                        if sub.name.starts_with('@') {
+                            let name = sub.name.clone();
+                            let matcher_set = parse_named_matcher_block(sub)?;
+                            local_named_matchers.insert(name, matcher_set);
+                        } else {
+                            sub_directives.push(sub.clone());
+                        }
+                    }
+                    sub_directives.sort_by_key(|sub| {
                         self.custom_order.get(&sub.name).copied().unwrap_or(500)
                     });
                     let mut sub_routes = Vec::new();
-                    for sub in &sorted_block {
-                        let r = self.adapt_directive(sub, &[], None, &HashMap::new())?;
+                    for sub in &sub_directives {
+                        let r = self.adapt_directive(sub, &[], None, &local_named_matchers)?;
                         sub_routes.push(r);
                     }
                     let cfg = HandlerConfig::new("subroute").with_field("routes", sub_routes);
@@ -1145,7 +1385,11 @@ impl Adapter {
             }
 
             "handle_path" => {
-                let prefix = dir.matcher.as_deref().or_else(|| dir.args.first().map(|s| s.as_str())).unwrap_or("");
+                let prefix = dir
+                    .matcher
+                    .as_deref()
+                    .or_else(|| dir.args.first().map(|s| s.as_str()))
+                    .unwrap_or("");
                 let clean_prefix = if prefix.ends_with("/*") {
                     &prefix[..prefix.len() - 2]
                 } else if prefix.ends_with('*') {
@@ -1155,18 +1399,29 @@ impl Adapter {
                 };
                 let mut sub_routes = Vec::new();
                 if !clean_prefix.is_empty() {
-                    let rewrite_cfg = HandlerConfig::new("rewrite").with_field("strip_path_prefix", clean_prefix);
+                    let rewrite_cfg =
+                        HandlerConfig::new("rewrite").with_field("strip_path_prefix", clean_prefix);
                     let mut r = Route::default();
                     r.handle = vec![rewrite_cfg];
                     sub_routes.push(r);
                 }
                 if let Some(ref block) = dir.block {
-                    let mut sorted_block = block.clone();
-                    sorted_block.sort_by_key(|sub| {
+                    let mut local_named_matchers = named_matchers.clone();
+                    let mut sub_directives = Vec::new();
+                    for sub in block {
+                        if sub.name.starts_with('@') {
+                            let name = sub.name.clone();
+                            let matcher_set = parse_named_matcher_block(sub)?;
+                            local_named_matchers.insert(name, matcher_set);
+                        } else {
+                            sub_directives.push(sub.clone());
+                        }
+                    }
+                    sub_directives.sort_by_key(|sub| {
                         self.custom_order.get(&sub.name).copied().unwrap_or(500)
                     });
-                    for sub in &sorted_block {
-                        let r = self.adapt_directive(sub, &[], None, &HashMap::new())?;
+                    for sub in &sub_directives {
+                        let r = self.adapt_directive(sub, &[], None, &local_named_matchers)?;
                         sub_routes.push(r);
                     }
                 }
@@ -1183,7 +1438,10 @@ impl Adapter {
                 if !self.named_routes.contains_key(name) {
                     return Err(ParseError::Adaptation {
                         line: dir.span.line,
-                        message: format!("cannot invoke named route '{}', which was not defined", name),
+                        message: format!(
+                            "cannot invoke named route '{}', which was not defined",
+                            name
+                        ),
                     });
                 }
 
@@ -1207,8 +1465,7 @@ impl Adapter {
 
             "log_name" => {
                 let name = dir.args.first().cloned().unwrap_or_default();
-                let cfg = HandlerConfig::new("log_name")
-                    .with_field("name", name);
+                let cfg = HandlerConfig::new("log_name").with_field("name", name);
                 configs.push(cfg);
             }
 
@@ -1282,7 +1539,10 @@ impl Adapter {
                         }
                     }
                 }
-                let size_bytes = max_size_str.as_deref().map(parse_size_bytes).unwrap_or(10 * 1024 * 1024);
+                let size_bytes = max_size_str
+                    .as_deref()
+                    .map(parse_size_bytes)
+                    .unwrap_or(10 * 1024 * 1024);
                 let cfg = HandlerConfig::new("request_body").with_field("max_size", size_bytes);
                 configs.push(cfg);
             }
@@ -1322,7 +1582,11 @@ impl Adapter {
             }
 
             "error" => {
-                let code = dir.args.first().and_then(|c| c.parse::<u16>().ok()).unwrap_or(500);
+                let code = dir
+                    .args
+                    .first()
+                    .and_then(|c| c.parse::<u16>().ok())
+                    .unwrap_or(500);
                 let message = if dir.args.len() > 1 {
                     dir.args[1..].join(" ")
                 } else {
@@ -1333,7 +1597,6 @@ impl Adapter {
                     .with_field("status_code", code);
                 configs.push(cfg);
             }
-
 
             other => {
                 // Generic handler passthrough
@@ -1385,15 +1648,17 @@ impl Adapter {
             .and_then(|a| a.disable_redirects)
             .unwrap_or(false);
 
-        let http_server = servers.entry(http_server_key).or_insert_with(|| HttpServer {
-            listen: vec![http_port_str],
-            routes: Vec::new(),
-            tls_connection_policies: None,
-            automatic_https: self.auto_https.clone(),
-            protocols: None,
-            logs: None,
-            errors: None,
-        });
+        let http_server = servers
+            .entry(http_server_key)
+            .or_insert_with(|| HttpServer {
+                listen: vec![http_port_str],
+                routes: Vec::new(),
+                tls_connection_policies: None,
+                automatic_https: self.auto_https.clone(),
+                protocols: None,
+                logs: None,
+                errors: None,
+            });
 
         if !disable_redirects {
             for host in https_hosts {
@@ -1443,7 +1708,11 @@ fn parse_log_directive(dir: &DirectiveNode, logger_name: &str) -> ParseResult<Lo
                     if let Some(wtype) = sub.args.first() {
                         match wtype.as_str() {
                             "file" => {
-                                let filename = sub.args.get(1).cloned().unwrap_or_else(|| "access.log".into());
+                                let filename = sub
+                                    .args
+                                    .get(1)
+                                    .cloned()
+                                    .unwrap_or_else(|| "access.log".into());
                                 let mut obj = serde_json::json!({
                                     "output": "file",
                                     "filename": filename,
@@ -1472,7 +1741,8 @@ fn parse_log_directive(dir: &DirectiveNode, logger_name: &str) -> ParseResult<Lo
                             }
                             "net" => {
                                 let addr = sub.args.get(1).cloned().unwrap_or_default();
-                                let mut obj = serde_json::json!({ "output": "net", "address": addr });
+                                let mut obj =
+                                    serde_json::json!({ "output": "net", "address": addr });
                                 if let Some(ref net_block) = sub.block {
                                     for opt in net_block {
                                         if opt.args.is_empty() {
@@ -1510,8 +1780,13 @@ fn parse_log_directive(dir: &DirectiveNode, logger_name: &str) -> ParseResult<Lo
                         for item in s_block {
                             match item.name.as_str() {
                                 "interval" => s_cfg.interval = item.args.first().cloned(),
-                                "first" => s_cfg.first = item.args.first().and_then(|s| s.parse().ok()),
-                                "thereafter" => s_cfg.thereafter = item.args.first().and_then(|s| s.parse().ok()),
+                                "first" => {
+                                    s_cfg.first = item.args.first().and_then(|s| s.parse().ok())
+                                }
+                                "thereafter" => {
+                                    s_cfg.thereafter =
+                                        item.args.first().and_then(|s| s.parse().ok())
+                                }
                                 _ => {}
                             }
                         }
@@ -1660,8 +1935,16 @@ fn parse_filter_node(node: &DirectiveNode) -> Option<serde_json::Value> {
             }
         }
         "ip_mask" => {
-            let mut ipv4 = node.args.get(1).and_then(|s| s.parse::<u8>().ok()).unwrap_or(16);
-            let mut ipv6 = node.args.get(2).and_then(|s| s.parse::<u8>().ok()).unwrap_or(32);
+            let mut ipv4 = node
+                .args
+                .get(1)
+                .and_then(|s| s.parse::<u8>().ok())
+                .unwrap_or(16);
+            let mut ipv6 = node
+                .args
+                .get(2)
+                .and_then(|s| s.parse::<u8>().ok())
+                .unwrap_or(32);
             if let Some(ref block) = node.block {
                 for item in block {
                     if item.name == "ipv4" {
@@ -1702,11 +1985,53 @@ fn parse_filter_node(node: &DirectiveNode) -> Option<serde_json::Value> {
 }
 
 fn json_upstream(addr: &str) -> serde_json::Value {
-    let dial = if addr.contains(':') {
-        addr.to_string()
+    let s = addr.trim();
+    let (scheme, rest) = if let Some(stripped) = s.strip_prefix("https://") {
+        (Some("https"), stripped)
+    } else if let Some(stripped) = s.strip_prefix("http://") {
+        (Some("http"), stripped)
     } else {
-        format!("{}:80", addr)
+        (None, s)
     };
+
+    let host_and_port = rest.split(['/', '?', '#']).next().unwrap_or(rest);
+
+    let (host, port) = if host_and_port.starts_with('[') {
+        if let Some(bracket_end) = host_and_port.find(']') {
+            let host_part = &host_and_port[1..bracket_end];
+            let after_bracket = &host_and_port[bracket_end + 1..];
+            let port = if let Some(colon_pos) = after_bracket.find(':') {
+                after_bracket[colon_pos + 1..].parse::<u16>().ok()
+            } else {
+                None
+            };
+            (host_part, port)
+        } else {
+            (host_and_port, None)
+        }
+    } else if host_and_port.starts_with(':') {
+        let port = host_and_port[1..].parse::<u16>().ok();
+        ("127.0.0.1", port)
+    } else if let Some((h, p_str)) = host_and_port.rsplit_once(':') {
+        if let Ok(p) = p_str.parse::<u16>() {
+            (h, Some(p))
+        } else {
+            (host_and_port, None)
+        }
+    } else {
+        (host_and_port, None)
+    };
+
+    let is_https = scheme == Some("https");
+    let default_port = if is_https { 443 } else { 80 };
+    let final_port = port.unwrap_or(default_port);
+
+    let dial = if host.contains(':') && !host.starts_with('[') {
+        format!("[{}]:{}", host, final_port)
+    } else {
+        format!("{}:{}", host, final_port)
+    };
+
     serde_json::json!({ "dial": dial })
 }
 
@@ -1748,7 +2073,11 @@ struct ParsedAddress {
     path_prefix: Option<String>,
 }
 
-fn parse_site_address(addr: &str, default_http_port: u16, default_https_port: u16) -> ParseResult<ParsedAddress> {
+fn parse_site_address(
+    addr: &str,
+    default_http_port: u16,
+    default_https_port: u16,
+) -> ParseResult<ParsedAddress> {
     if addr.starts_with("wss://") {
         return Err(ParseError::Syntax {
             line: 0,
@@ -1801,7 +2130,14 @@ fn parse_site_address(addr: &str, default_http_port: u16, default_https_port: u1
         let host_val = if h.is_empty() { "*" } else { h };
         (host_val.to_string(), p)
     } else if s.is_empty() || s == "*" {
-        ("*".to_string(), if scheme == Some("http") { default_http_port } else { default_https_port })
+        (
+            "*".to_string(),
+            if scheme == Some("http") {
+                default_http_port
+            } else {
+                default_https_port
+            },
+        )
     } else {
         let p = if scheme == Some("http") {
             default_http_port
@@ -1860,17 +2196,23 @@ fn populate_named_matcher_item(set: &mut MatcherSet, name: &str, args: &[String]
         "header_regexp" => {
             if args.len() == 2 {
                 let mut re_map = set.header_regexp.clone().unwrap_or_default();
-                re_map.insert(args[0].clone(), RegexpMatcher {
-                    name: None,
-                    pattern: args[1].clone(),
-                });
+                re_map.insert(
+                    args[0].clone(),
+                    RegexpMatcher {
+                        name: None,
+                        pattern: args[1].clone(),
+                    },
+                );
                 set.header_regexp = Some(re_map);
             } else if args.len() >= 3 {
                 let mut re_map = set.header_regexp.clone().unwrap_or_default();
-                re_map.insert(args[1].clone(), RegexpMatcher {
-                    name: Some(args[0].clone()),
-                    pattern: args[2].clone(),
-                });
+                re_map.insert(
+                    args[1].clone(),
+                    RegexpMatcher {
+                        name: Some(args[0].clone()),
+                        pattern: args[2].clone(),
+                    },
+                );
                 set.header_regexp = Some(re_map);
             }
         }
@@ -1880,7 +2222,10 @@ fn populate_named_matcher_item(set: &mut MatcherSet, name: &str, args: &[String]
                 if let Some((k, v)) = arg.split_once('=') {
                     q_map.entry(k.to_string()).or_default().push(v.to_string());
                 } else if args.len() == 2 && q_map.is_empty() {
-                    q_map.entry(args[0].clone()).or_default().push(args[1].clone());
+                    q_map
+                        .entry(args[0].clone())
+                        .or_default()
+                        .push(args[1].clone());
                     break;
                 }
             }
@@ -1939,12 +2284,20 @@ fn parse_named_matcher_block(dir: &DirectiveNode) -> ParseResult<MatcherSet> {
                 let inner = if let Some(ref not_block) = sub.block {
                     let mut inner_set = MatcherSet::default();
                     for inner_sub in not_block {
-                        populate_named_matcher_item(&mut inner_set, inner_sub.name.as_str(), &inner_sub.args);
+                        populate_named_matcher_item(
+                            &mut inner_set,
+                            inner_sub.name.as_str(),
+                            &inner_sub.args,
+                        );
                     }
                     inner_set
                 } else if !sub.args.is_empty() {
                     let mut inner_set = MatcherSet::default();
-                    populate_named_matcher_item(&mut inner_set, sub.args[0].as_str(), &sub.args[1..]);
+                    populate_named_matcher_item(
+                        &mut inner_set,
+                        sub.args[0].as_str(),
+                        &sub.args[1..],
+                    );
                     inner_set
                 } else {
                     MatcherSet::default()
@@ -1979,7 +2332,11 @@ fn parse_named_matcher_block(dir: &DirectiveNode) -> ParseResult<MatcherSet> {
                 if dir.args[1].starts_with('/') {
                     inner_set.path = Some(dir.args[1..].to_vec());
                 } else {
-                    populate_named_matcher_item(&mut inner_set, dir.args[1].as_str(), &dir.args[2..]);
+                    populate_named_matcher_item(
+                        &mut inner_set,
+                        dir.args[1].as_str(),
+                        &dir.args[2..],
+                    );
                 }
             }
             set.not = Some(vec![inner_set]);
@@ -2004,7 +2361,10 @@ fn parse_tls_directive(dir: &DirectiveNode) -> ParseResult<TlsConnectionPolicy> 
             });
         } else if first == "staging" || first == "dev" {
             policy.certificate_selection = Some(CertificateSelection {
-                any_tag: Some(vec![format!("ca:{}", raddy_core::config::LETS_ENCRYPT_STAGING)]),
+                any_tag: Some(vec![format!(
+                    "ca:{}",
+                    raddy_core::config::LETS_ENCRYPT_STAGING
+                )]),
                 all_tags: None,
                 serial_number: None,
             });
@@ -2031,7 +2391,9 @@ fn parse_tls_directive(dir: &DirectiveNode) -> ParseResult<TlsConnectionPolicy> 
                 "ca" => {
                     if let Some(ca_arg) = sub.args.first() {
                         let resolved = raddy_core::config::resolve_acme_ca(ca_arg);
-                        let tags = policy.certificate_selection.get_or_insert_with(CertificateSelection::default);
+                        let tags = policy
+                            .certificate_selection
+                            .get_or_insert_with(CertificateSelection::default);
                         let any_tag = tags.any_tag.get_or_insert_with(Vec::new);
                         any_tag.push(format!("ca:{}", resolved));
                     }
@@ -2051,17 +2413,23 @@ fn parse_tls_directive(dir: &DirectiveNode) -> ParseResult<TlsConnectionPolicy> 
                     policy.curves = Some(sub.args.clone());
                 }
                 "challenges" => {
-                    let tags = policy.certificate_selection.get_or_insert_with(CertificateSelection::default);
+                    let tags = policy
+                        .certificate_selection
+                        .get_or_insert_with(CertificateSelection::default);
                     let any_tag = tags.any_tag.get_or_insert_with(Vec::new);
                     any_tag.push(format!("challenges:{}", sub.args.join(",")));
                 }
                 "disable_http_challenge" | "disable_http" => {
-                    let tags = policy.certificate_selection.get_or_insert_with(CertificateSelection::default);
+                    let tags = policy
+                        .certificate_selection
+                        .get_or_insert_with(CertificateSelection::default);
                     let any_tag = tags.any_tag.get_or_insert_with(Vec::new);
                     any_tag.push("disable_http_challenge".to_string());
                 }
                 "disable_tls_alpn_challenge" | "disable_tls_alpn" => {
-                    let tags = policy.certificate_selection.get_or_insert_with(CertificateSelection::default);
+                    let tags = policy
+                        .certificate_selection
+                        .get_or_insert_with(CertificateSelection::default);
                     let any_tag = tags.any_tag.get_or_insert_with(Vec::new);
                     any_tag.push("disable_tls_alpn_challenge".to_string());
                 }
@@ -2072,23 +2440,32 @@ fn parse_tls_directive(dir: &DirectiveNode) -> ParseResult<TlsConnectionPolicy> 
                                 "ca" => {
                                     if let Some(ca_arg) = issuer_sub.args.first() {
                                         let resolved = raddy_core::config::resolve_acme_ca(ca_arg);
-                                        let tags = policy.certificate_selection.get_or_insert_with(CertificateSelection::default);
+                                        let tags = policy
+                                            .certificate_selection
+                                            .get_or_insert_with(CertificateSelection::default);
                                         let any_tag = tags.any_tag.get_or_insert_with(Vec::new);
                                         any_tag.push(format!("ca:{}", resolved));
                                     }
                                 }
                                 "challenges" => {
-                                    let tags = policy.certificate_selection.get_or_insert_with(CertificateSelection::default);
+                                    let tags = policy
+                                        .certificate_selection
+                                        .get_or_insert_with(CertificateSelection::default);
                                     let any_tag = tags.any_tag.get_or_insert_with(Vec::new);
-                                    any_tag.push(format!("challenges:{}", issuer_sub.args.join(",")));
+                                    any_tag
+                                        .push(format!("challenges:{}", issuer_sub.args.join(",")));
                                 }
                                 "disable_http_challenge" | "disable_http" => {
-                                    let tags = policy.certificate_selection.get_or_insert_with(CertificateSelection::default);
+                                    let tags = policy
+                                        .certificate_selection
+                                        .get_or_insert_with(CertificateSelection::default);
                                     let any_tag = tags.any_tag.get_or_insert_with(Vec::new);
                                     any_tag.push("disable_http_challenge".to_string());
                                 }
                                 "disable_tls_alpn_challenge" | "disable_tls_alpn" => {
-                                    let tags = policy.certificate_selection.get_or_insert_with(CertificateSelection::default);
+                                    let tags = policy
+                                        .certificate_selection
+                                        .get_or_insert_with(CertificateSelection::default);
                                     let any_tag = tags.any_tag.get_or_insert_with(Vec::new);
                                     any_tag.push("disable_tls_alpn_challenge".to_string());
                                 }
@@ -2192,8 +2569,14 @@ mod tests {
         let route = &srv.routes[0];
         assert_eq!(route.handle.len(), 1);
         assert_eq!(route.handle[0].handler, "static_response");
-        assert_eq!(route.handle[0].details.get("status_code"), Some(&serde_json::json!(200)));
-        assert_eq!(route.handle[0].details.get("body"), Some(&serde_json::json!("Hello Raddy!")));
+        assert_eq!(
+            route.handle[0].details.get("status_code"),
+            Some(&serde_json::json!(200))
+        );
+        assert_eq!(
+            route.handle[0].details.get("body"),
+            Some(&serde_json::json!("Hello Raddy!"))
+        );
     }
 
     #[test]
@@ -2252,14 +2635,23 @@ hkg.eeeu.de {
         assert_eq!(srv_https.routes[0].handle[0].handler, "static_response");
         let srv_logs = srv_https.logs.as_ref().unwrap();
         assert_eq!(srv_logs.default_logger_name.as_deref(), Some("log0"));
-        assert_eq!(srv_logs.logger_names.as_ref().unwrap().get("hkg.eeeu.de"), Some(&"log0".to_string()));
+        assert_eq!(
+            srv_logs.logger_names.as_ref().unwrap().get("hkg.eeeu.de"),
+            Some(&"log0".to_string())
+        );
 
         // 3. Verify automatic HTTP server on port 80 with redirect
         let srv_http = http.servers.get("srv_:80").unwrap();
         assert_eq!(srv_http.routes.len(), 1);
         assert_eq!(srv_http.routes[0].handle[0].handler, "static_response");
-        assert_eq!(srv_http.routes[0].handle[0].details.get("status_code"), Some(&serde_json::json!(308)));
-        assert_eq!(srv_http.routes[0].handle[0].details.get("location"), Some(&serde_json::json!("https://{host}{uri}")));
+        assert_eq!(
+            srv_http.routes[0].handle[0].details.get("status_code"),
+            Some(&serde_json::json!(308))
+        );
+        assert_eq!(
+            srv_http.routes[0].handle[0].details.get("location"),
+            Some(&serde_json::json!("https://{host}{uri}"))
+        );
     }
 
     #[test]
@@ -2298,19 +2690,37 @@ example.com {
 
         let writer = log0.writer.as_ref().unwrap();
         assert_eq!(writer.get("output"), Some(&serde_json::json!("file")));
-        assert_eq!(writer.get("filename"), Some(&serde_json::json!("/var/log/access.log")));
+        assert_eq!(
+            writer.get("filename"),
+            Some(&serde_json::json!("/var/log/access.log"))
+        );
         assert_eq!(writer.get("roll_size"), Some(&serde_json::json!("50mb")));
         assert_eq!(writer.get("roll_keep"), Some(&serde_json::json!("5")));
-        assert_eq!(writer.get("roll_keep_for"), Some(&serde_json::json!("720h")));
-        assert_eq!(writer.get("roll_uncompressed"), Some(&serde_json::json!(true)));
-        assert_eq!(writer.get("roll_local_time"), Some(&serde_json::json!(true)));
+        assert_eq!(
+            writer.get("roll_keep_for"),
+            Some(&serde_json::json!("720h"))
+        );
+        assert_eq!(
+            writer.get("roll_uncompressed"),
+            Some(&serde_json::json!(true))
+        );
+        assert_eq!(
+            writer.get("roll_local_time"),
+            Some(&serde_json::json!(true))
+        );
         assert_eq!(writer.get("mode"), Some(&serde_json::json!("0640")));
 
         let encoder = log0.encoder.as_ref().unwrap();
         assert_eq!(encoder.get("format"), Some(&serde_json::json!("json")));
-        assert_eq!(encoder.get("time_format"), Some(&serde_json::json!("rfc3339")));
+        assert_eq!(
+            encoder.get("time_format"),
+            Some(&serde_json::json!("rfc3339"))
+        );
         assert_eq!(encoder.get("time_local"), Some(&serde_json::json!(true)));
-        assert_eq!(encoder.get("duration_format"), Some(&serde_json::json!("ms")));
+        assert_eq!(
+            encoder.get("duration_format"),
+            Some(&serde_json::json!("ms"))
+        );
 
         let sampling = log0.sampling.as_ref().unwrap();
         assert_eq!(sampling.interval.as_deref(), Some("2s"));
@@ -2348,22 +2758,37 @@ example.com {
 
         let encoder = log0.encoder.as_ref().unwrap();
         assert_eq!(encoder.get("format"), Some(&serde_json::json!("filter")));
-        assert_eq!(encoder.get("wrap"), Some(&serde_json::json!({ "format": "json" })));
+        assert_eq!(
+            encoder.get("wrap"),
+            Some(&serde_json::json!({ "format": "json" }))
+        );
 
         let filters = encoder.get("filters").and_then(|v| v.as_array()).unwrap();
         assert_eq!(filters.len(), 4);
-        assert_eq!(filters[0].get("field"), Some(&serde_json::json!("request>headers>User-Agent")));
+        assert_eq!(
+            filters[0].get("field"),
+            Some(&serde_json::json!("request>headers>User-Agent"))
+        );
         assert_eq!(filters[0].get("type"), Some(&serde_json::json!("delete")));
 
-        assert_eq!(filters[1].get("field"), Some(&serde_json::json!("request>remote_ip")));
+        assert_eq!(
+            filters[1].get("field"),
+            Some(&serde_json::json!("request>remote_ip"))
+        );
         assert_eq!(filters[1].get("type"), Some(&serde_json::json!("ip_mask")));
         assert_eq!(filters[1].get("ipv4"), Some(&serde_json::json!(16)));
         assert_eq!(filters[1].get("ipv6"), Some(&serde_json::json!(32)));
 
-        assert_eq!(filters[2].get("field"), Some(&serde_json::json!("request>uri")));
+        assert_eq!(
+            filters[2].get("field"),
+            Some(&serde_json::json!("request>uri"))
+        );
         assert_eq!(filters[2].get("type"), Some(&serde_json::json!("query")));
 
-        assert_eq!(filters[3].get("field"), Some(&serde_json::json!("request>headers>Cookie")));
+        assert_eq!(
+            filters[3].get("field"),
+            Some(&serde_json::json!("request>headers>Cookie"))
+        );
         assert_eq!(filters[3].get("type"), Some(&serde_json::json!("cookie")));
     }
 
@@ -2408,13 +2833,27 @@ example.com {
 
         assert_eq!(srv_logs.log_credentials, Some(true));
         let logger_names = srv_logs.logger_names.as_ref().unwrap();
-        assert_eq!(logger_names.get("foo.example.com"), Some(&"log0".to_string()));
-        assert_eq!(logger_names.get("bar.example.com"), Some(&"log1".to_string()));
+        assert_eq!(
+            logger_names.get("foo.example.com"),
+            Some(&"log0".to_string())
+        );
+        assert_eq!(
+            logger_names.get("bar.example.com"),
+            Some(&"log1".to_string())
+        );
         // custom_logger had no_hostname, so it shouldn't be mapped directly
-        assert_ne!(logger_names.get("*.example.com"), Some(&"custom_logger".to_string()));
+        assert_ne!(
+            logger_names.get("*.example.com"),
+            Some(&"custom_logger".to_string())
+        );
 
         // Check routes have log_skip, log_append, log_name handlers
-        let handlers: Vec<&str> = srv.routes.iter().flat_map(|r| r.handle.iter()).map(|h| h.handler.as_str()).collect();
+        let handlers: Vec<&str> = srv
+            .routes
+            .iter()
+            .flat_map(|r| r.handle.iter())
+            .map(|h| h.handler.as_str())
+            .collect();
         assert!(handlers.contains(&"log_skip"));
         assert!(handlers.contains(&"log_append"));
         assert!(handlers.contains(&"log_name"));

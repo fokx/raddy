@@ -1,11 +1,11 @@
-use std::sync::Arc;
 use arc_swap::ArcSwap;
 use parking_lot::Mutex;
-use tokio::sync::watch;
 use raddy_core::config::Config;
 use raddy_core::module::ModuleRegistry;
 use raddy_http::server::ServerManager;
 use raddy_tls::TlsManager;
+use std::sync::Arc;
+use tokio::sync::watch;
 
 use crate::error::{AdminError, Result};
 
@@ -42,16 +42,16 @@ impl AppState {
     /// 4. Spawns new server background tasks.
     /// 5. Atomically stores `new_config` in `ArcSwap`.
     pub async fn reload(&self, new_config: Config) -> Result<()> {
-        let mut server_manager = ServerManager::from_config(
-            &new_config,
-            &self.registry,
-            self.tls_manager.clone(),
-        )
-        .await
-        .map_err(AdminError::HttpServer)?;
+        let mut server_manager =
+            ServerManager::from_config(&new_config, &self.registry, self.tls_manager.clone())
+                .await
+                .map_err(AdminError::HttpServer)?;
 
         // Attempt binding first. If this fails, the old server continues serving without interruption.
-        server_manager.bind_all().await.map_err(AdminError::HttpServer)?;
+        server_manager
+            .bind_all()
+            .await
+            .map_err(AdminError::HttpServer)?;
 
         let pending_acme = server_manager.pending_acme().to_vec();
 
@@ -79,24 +79,48 @@ impl AppState {
                 for h in pending_acme {
                     let tls_clone = tls.clone();
                     let h_clone = h.clone();
-                    tracing::info!("Beginning ACME automated certificate provisioning for '{}'...", h);
+                    tracing::info!(
+                        "Beginning ACME automated certificate provisioning for '{}'...",
+                        h
+                    );
                     match tokio::time::timeout(
                         std::time::Duration::from_secs(30),
                         tls.provision_identifier(&h, false),
-                    ).await {
+                    )
+                    .await
+                    {
                         Ok(Ok(())) => {
-                            tracing::info!("ACME certificate ready and installed for '{}'", h_clone);
+                            tracing::info!(
+                                "ACME certificate ready and installed for '{}'",
+                                h_clone
+                            );
                         }
                         Ok(Err(e)) => {
-                            tracing::error!("Failed to auto-provision ACME cert for '{}': {}", h_clone, e);
+                            tracing::error!(
+                                "Failed to auto-provision ACME cert for '{}': {}",
+                                h_clone,
+                                e
+                            );
                         }
                         Err(_) => {
-                            tracing::info!("ACME provisioning for '{}' taking longer than 30s, continuing in background...", h_clone);
+                            tracing::info!(
+                                "ACME provisioning for '{}' taking longer than 30s, continuing in background...",
+                                h_clone
+                            );
                             tokio::spawn(async move {
-                                if let Err(e) = tls_clone.provision_identifier(&h_clone, false).await {
-                                    tracing::error!("Background auto-provisioning failed for '{}': {}", h_clone, e);
+                                if let Err(e) =
+                                    tls_clone.provision_identifier(&h_clone, false).await
+                                {
+                                    tracing::error!(
+                                        "Background auto-provisioning failed for '{}': {}",
+                                        h_clone,
+                                        e
+                                    );
                                 } else {
-                                    tracing::info!("Background auto-provisioning succeeded for '{}'", h_clone);
+                                    tracing::info!(
+                                        "Background auto-provisioning succeeded for '{}'",
+                                        h_clone
+                                    );
                                 }
                             });
                         }

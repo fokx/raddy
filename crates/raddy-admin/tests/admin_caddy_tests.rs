@@ -35,7 +35,13 @@ fn test_admin_handler_check_host_case_insensitive() {
         if want_err {
             assert!(res.is_err(), "{}: expected error for host {}", name, host);
         } else {
-            assert!(res.is_ok(), "{}: expected ok for host {}, got {:?}", name, host, res.err());
+            assert!(
+                res.is_ok(),
+                "{}: expected ok for host {}, got {:?}",
+                name,
+                host,
+                res.err()
+            );
         }
     }
 }
@@ -65,7 +71,11 @@ fn test_admin_handler_origin_allowed_case_insensitive_host() {
 
     for (name, allowed, origin, want_ok) in cases {
         let ok = origin_allowed(origin, &[allowed]);
-        assert_eq!(ok, want_ok, "{}: origin {} allowed should be {}", name, origin, want_ok);
+        assert_eq!(
+            ok, want_ok,
+            "{}: origin {} allowed should be {}",
+            name, origin, want_ok
+        );
     }
 }
 
@@ -149,10 +159,27 @@ fn test_unsynced_config_access() {
     for (i, (method, path, payload, expect, should_err)) in cases.into_iter().enumerate() {
         let res = unsynced_config_access(&mut config, method, path, payload.as_bytes());
         if should_err {
-            assert!(res.is_err(), "Test {}: Expected error for {} {}", i, method, path);
+            assert!(
+                res.is_err(),
+                "Test {}: Expected error for {} {}",
+                i,
+                method,
+                path
+            );
         } else {
-            assert!(res.is_ok(), "Test {}: Unexpected error for {} {}: {:?}", i, method, path, res.err());
-            assert_eq!(config, expect, "Test {}: config mismatch after {} {}", i, method, path);
+            assert!(
+                res.is_ok(),
+                "Test {}: Unexpected error for {} {}: {:?}",
+                i,
+                method,
+                path,
+                res.err()
+            );
+            assert_eq!(
+                config, expect,
+                "Test {}: config mismatch after {} {}",
+                i, method, path
+            );
         }
     }
 }

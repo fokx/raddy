@@ -1,13 +1,14 @@
+use crate::placeholder::PlaceholderProvider;
+use bytes::Bytes;
+use futures_core::Stream;
+use http::{HeaderMap, HeaderValue, Method, StatusCode, Uri};
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
-use http::{HeaderMap, HeaderValue, Method, StatusCode, Uri};
-use bytes::Bytes;
-use futures_core::Stream;
-use crate::placeholder::PlaceholderProvider;
 
-pub type BoxBodyStream = Pin<Box<dyn Stream<Item = std::io::Result<Bytes>> + Send + Sync + 'static>>;
+pub type BoxBodyStream =
+    Pin<Box<dyn Stream<Item = std::io::Result<Bytes>> + Send + Sync + 'static>>;
 
 /// Request/Response Context flowing through the middleware and handler chain.
 pub struct Context {
@@ -155,7 +156,10 @@ impl std::fmt::Debug for Context {
             .field("vars", &self.vars)
             .field("status", &self.status)
             .field("response_headers", &self.response_headers)
-            .field("response_body_len", &self.response_body.as_ref().map(|b| b.len()))
+            .field(
+                "response_body_len",
+                &self.response_body.as_ref().map(|b| b.len()),
+            )
             .field("has_response_stream", &self.response_stream.is_some())
             .field("response_written", &self.response_written)
             .field("log_skip", &self.log_skip)
@@ -244,16 +248,22 @@ impl PlaceholderProvider for Context {
 
             "query" | "http.request.uri.query" => self.uri.query().map(|q| q.to_string()),
 
-            "scheme" | "http.request.scheme" => self.uri.scheme_str().map(|s| s.to_string()).or_else(|| {
-                if self.tls_server_name.is_some() {
-                    Some("https".to_string())
-                } else {
-                    Some("http".to_string())
-                }
-            }),
+            "scheme" | "http.request.scheme" => {
+                self.uri.scheme_str().map(|s| s.to_string()).or_else(|| {
+                    if self.tls_server_name.is_some() {
+                        Some("https".to_string())
+                    } else {
+                        Some("http".to_string())
+                    }
+                })
+            }
 
-            "remote_host" | "http.request.remote.host" | "client_ip" => self.remote_addr.map(|a| a.ip().to_string()),
-            "remote_port" | "http.request.remote.port" => self.remote_addr.map(|a| a.port().to_string()),
+            "remote_host" | "http.request.remote.host" | "client_ip" => {
+                self.remote_addr.map(|a| a.ip().to_string())
+            }
+            "remote_port" | "http.request.remote.port" => {
+                self.remote_addr.map(|a| a.port().to_string())
+            }
 
             k if k.starts_with("query.") || k.starts_with("http.request.uri.query.") => {
                 let param = if let Some(stripped) = k.strip_prefix("query.") {
@@ -261,17 +271,21 @@ impl PlaceholderProvider for Context {
                 } else {
                     k.strip_prefix("http.request.uri.query.").unwrap_or(k)
                 };
-                let val = self.uri.query().and_then(|q| {
-                    for pair in q.split('&') {
-                        let mut parts = pair.splitn(2, '=');
-                        if let Some(k) = parts.next() {
-                            if k == param {
-                                return Some(parts.next().unwrap_or("").to_string());
+                let val = self
+                    .uri
+                    .query()
+                    .and_then(|q| {
+                        for pair in q.split('&') {
+                            let mut parts = pair.splitn(2, '=');
+                            if let Some(k) = parts.next() {
+                                if k == param {
+                                    return Some(parts.next().unwrap_or("").to_string());
+                                }
                             }
                         }
-                    }
-                    None
-                }).unwrap_or_default();
+                        None
+                    })
+                    .unwrap_or_default();
                 Some(val)
             }
 
@@ -281,7 +295,12 @@ impl PlaceholderProvider for Context {
                 } else {
                     k.strip_prefix("http.request.header.").unwrap_or(k)
                 };
-                let val = self.headers.get(header_name).and_then(|v| v.to_str().ok()).unwrap_or("").to_string();
+                let val = self
+                    .headers
+                    .get(header_name)
+                    .and_then(|v| v.to_str().ok())
+                    .unwrap_or("")
+                    .to_string();
                 Some(val)
             }
 
@@ -291,7 +310,12 @@ impl PlaceholderProvider for Context {
                 } else {
                     k.strip_prefix("http.response.header.").unwrap_or(k)
                 };
-                let val = self.response_headers.get(header_name).and_then(|v| v.to_str().ok()).unwrap_or("").to_string();
+                let val = self
+                    .response_headers
+                    .get(header_name)
+                    .and_then(|v| v.to_str().ok())
+                    .unwrap_or("")
+                    .to_string();
                 Some(val)
             }
 
@@ -324,13 +348,13 @@ impl PlaceholderProvider for Context {
 
             "file.ext" | "http.request.uri.path.file.ext" => {
                 let p = self.uri.path();
-                let ext = std::path::Path::new(p)
-                    .extension()
-                    .and_then(|e| e.to_str());
+                let ext = std::path::Path::new(p).extension().and_then(|e| e.to_str());
                 ext.map(|e| format!(".{}", e))
             }
 
-            "orig_method" | "http.request.orig_method" => Some(self.orig_method.as_str().to_string()),
+            "orig_method" | "http.request.orig_method" => {
+                Some(self.orig_method.as_str().to_string())
+            }
 
             k if k.starts_with("cookie.") || k.starts_with("http.request.cookie.") => {
                 let cookie_name = if let Some(stripped) = k.strip_prefix("cookie.") {
@@ -338,7 +362,11 @@ impl PlaceholderProvider for Context {
                 } else {
                     k.strip_prefix("http.request.cookie.").unwrap_or(k)
                 };
-                let cookie_hdr = self.headers.get(http::header::COOKIE).and_then(|v| v.to_str().ok()).unwrap_or("");
+                let cookie_hdr = self
+                    .headers
+                    .get(http::header::COOKIE)
+                    .and_then(|v| v.to_str().ok())
+                    .unwrap_or("");
                 for pair in cookie_hdr.split(';') {
                     let mut parts = pair.trim().splitn(2, '=');
                     if let (Some(name), Some(val)) = (parts.next(), parts.next()) {
@@ -366,11 +394,46 @@ impl PlaceholderProvider for Context {
                 None
             }
 
-            "err.status_code" => self.vars.get("err.status_code").cloned().or_else(|| self.status.map(|s| s.as_u16().to_string())),
-            "err.status_text" => self.vars.get("err.status_text").cloned().or_else(|| self.status.and_then(|s| s.canonical_reason().map(|r| r.to_string()))),
-            "err.message" => self.vars.get("err.message").cloned(),
+            "err.status_code" | "http.error.status_code" => self
+                .vars
+                .get("http.error.status_code")
+                .or_else(|| self.vars.get("err.status_code"))
+                .cloned()
+                .or_else(|| self.status.map(|s| s.as_u16().to_string())),
+            "err.status_text" | "http.error.status_text" => self
+                .vars
+                .get("http.error.status_text")
+                .or_else(|| self.vars.get("err.status_text"))
+                .cloned()
+                .or_else(|| {
+                    self.status
+                        .and_then(|s| s.canonical_reason().map(|r| r.to_string()))
+                }),
+            "err.message" | "http.error.message" => self
+                .vars
+                .get("http.error.message")
+                .or_else(|| self.vars.get("err.message"))
+                .cloned(),
 
-            "file_match.relative" | "http.matchers.file.relative" => self.vars.get("file_match.relative").cloned(),
+            "file_match.relative" | "http.matchers.file.relative" => {
+                self.vars.get("file_match.relative").cloned()
+            }
+
+            "upstream_hostport" | "http.reverse_proxy.upstream.hostport" => self
+                .vars
+                .get("http.reverse_proxy.upstream.hostport")
+                .or_else(|| self.vars.get("upstream_hostport"))
+                .cloned(),
+            "upstream_host" | "http.reverse_proxy.upstream.host" => self
+                .vars
+                .get("http.reverse_proxy.upstream.host")
+                .or_else(|| self.vars.get("upstream_host"))
+                .cloned(),
+            "upstream_port" | "http.reverse_proxy.upstream.port" => self
+                .vars
+                .get("http.reverse_proxy.upstream.port")
+                .or_else(|| self.vars.get("upstream_port"))
+                .cloned(),
 
             k if k.starts_with("vars.") => {
                 let var_name = k.strip_prefix("vars.")?;
@@ -406,11 +469,17 @@ mod tests {
         let ctx = Context::new(Method::GET, uri, headers, Bytes::new());
 
         let evaluated = eval_placeholders("https://{host}{uri}", &ctx);
-        assert_eq!(evaluated, "https://hkg.eeeu.de/search?q=rust&category=network");
+        assert_eq!(
+            evaluated,
+            "https://hkg.eeeu.de/search?q=rust&category=network"
+        );
         assert_eq!(ctx.get_placeholder("host"), Some("hkg.eeeu.de".to_string()));
         assert_eq!(ctx.get_placeholder("port"), Some("80".to_string()));
         assert_eq!(ctx.get_placeholder("query.q"), Some("rust".to_string()));
-        assert_eq!(ctx.get_placeholder("query.category"), Some("network".to_string()));
+        assert_eq!(
+            ctx.get_placeholder("query.category"),
+            Some("network".to_string())
+        );
         assert_eq!(ctx.get_placeholder("path"), Some("/search".to_string()));
     }
 }

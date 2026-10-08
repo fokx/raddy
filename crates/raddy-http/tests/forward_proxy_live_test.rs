@@ -1,10 +1,10 @@
-use std::time::Duration;
-use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
+use base64::engine::general_purpose::STANDARD as BASE64;
 use raddy_caddyfile::adapt_caddyfile;
 use raddy_core::module::ModuleRegistry;
 use raddy_http::router::compile_virtual_host_router;
 use raddy_http::server::HttpServerInstance;
+use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
@@ -57,23 +57,25 @@ async fn test_live_forward_proxy_end_to_end() {
     let server_cfg = http_app.servers.values().next().expect("Missing server");
 
     let registry = ModuleRegistry::new();
-    let vhost_router = compile_virtual_host_router(server_cfg, &registry).expect("Failed to compile router");
+    let vhost_router =
+        compile_virtual_host_router(server_cfg, &registry).expect("Failed to compile router");
 
     let mut instance = HttpServerInstance::new("fp_test_server", "127.0.0.1:0", vhost_router);
     instance.bind().await.expect("Failed to bind server");
     let bound_addr = instance.local_addr().expect("Missing bound addr");
 
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
-    let server_task = tokio::spawn(async move {
-        instance.run(shutdown_rx).await
-    });
+    let server_task = tokio::spawn(async move { instance.run(shutdown_rx).await });
 
     // Let server initialize
     tokio::time::sleep(Duration::from_millis(50)).await;
 
     // 3. Test PAC file serving
     let mut stream = TcpStream::connect(bound_addr).await.unwrap();
-    let pac_req = format!("GET /proxy.pac HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nConnection: close\r\n\r\n", bound_addr.port());
+    let pac_req = format!(
+        "GET /proxy.pac HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nConnection: close\r\n\r\n",
+        bound_addr.port()
+    );
     stream.write_all(pac_req.as_bytes()).await.unwrap();
     let mut resp_bytes = Vec::new();
     stream.read_to_end(&mut resp_bytes).await.unwrap();
@@ -85,7 +87,8 @@ async fn test_live_forward_proxy_end_to_end() {
     // 4. Test Probe Resistance:
     // a) Secret domain without auth -> 407 hidden page
     let mut stream = TcpStream::connect(bound_addr).await.unwrap();
-    let secret_req = format!("GET / HTTP/1.1\r\nHost: secret.proxy.local\r\nConnection: close\r\n\r\n");
+    let secret_req =
+        format!("GET / HTTP/1.1\r\nHost: secret.proxy.local\r\nConnection: close\r\n\r\n");
     stream.write_all(secret_req.as_bytes()).await.unwrap();
     let mut resp_bytes = Vec::new();
     stream.read_to_end(&mut resp_bytes).await.unwrap();
@@ -96,7 +99,10 @@ async fn test_live_forward_proxy_end_to_end() {
 
     // b) Regular site without auth -> 200 "Welcome to host website" (passthrough!)
     let mut stream = TcpStream::connect(bound_addr).await.unwrap();
-    let site_req = format!("GET / HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nConnection: close\r\n\r\n", bound_addr.port());
+    let site_req = format!(
+        "GET / HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nConnection: close\r\n\r\n",
+        bound_addr.port()
+    );
     stream.write_all(site_req.as_bytes()).await.unwrap();
     let mut resp_bytes = Vec::new();
     stream.read_to_end(&mut resp_bytes).await.unwrap();
@@ -129,7 +135,11 @@ async fn test_live_forward_proxy_end_to_end() {
     let mut resp_bytes = Vec::new();
     stream.read_to_end(&mut resp_bytes).await.unwrap();
     let resp_str = String::from_utf8_lossy(&resp_bytes);
-    assert!(resp_str.contains("HTTP/1.1 200 OK"), "Got response: {}", resp_str);
+    assert!(
+        resp_str.contains("HTTP/1.1 200 OK"),
+        "Got response: {}",
+        resp_str
+    );
     assert!(resp_str.contains("Hello from target backend!"));
     assert!(resp_str.contains("via: 1.1 caddy"));
 
@@ -147,10 +157,17 @@ async fn test_live_forward_proxy_end_to_end() {
     let mut resp_buf = [0u8; 1024];
     let n = stream.read(&mut resp_buf).await.unwrap();
     let resp_str = String::from_utf8_lossy(&resp_buf[..n]);
-    assert!(resp_str.contains("200 OK"), "Expected 200 OK for CONNECT, got: {}", resp_str);
+    assert!(
+        resp_str.contains("200 OK"),
+        "Expected 200 OK for CONNECT, got: {}",
+        resp_str
+    );
 
     // Send HTTP GET through the upgraded tunnel
-    let tunnel_req = format!("GET /hello HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nConnection: close\r\n\r\n", target_addr.port());
+    let tunnel_req = format!(
+        "GET /hello HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nConnection: close\r\n\r\n",
+        target_addr.port()
+    );
     stream.write_all(tunnel_req.as_bytes()).await.unwrap();
     stream.flush().await.unwrap();
 
@@ -187,22 +204,22 @@ async fn test_live_forward_proxy_standard_auth_challenge() {
     let server_cfg = http_app.servers.values().next().expect("Missing server");
 
     let registry = ModuleRegistry::new();
-    let vhost_router = compile_virtual_host_router(server_cfg, &registry).expect("Failed to compile router");
+    let vhost_router =
+        compile_virtual_host_router(server_cfg, &registry).expect("Failed to compile router");
 
     let mut instance = HttpServerInstance::new("fp_std_server", "127.0.0.1:0", vhost_router);
     instance.bind().await.expect("Failed to bind server");
     let bound_addr = instance.local_addr().expect("Missing bound addr");
 
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
-    let server_task = tokio::spawn(async move {
-        instance.run(shutdown_rx).await
-    });
+    let server_task = tokio::spawn(async move { instance.run(shutdown_rx).await });
 
     tokio::time::sleep(Duration::from_millis(50)).await;
 
     // 1. Unauthenticated request to standard forward proxy -> 407 Proxy Authentication Required
     let mut stream = TcpStream::connect(bound_addr).await.unwrap();
-    let req = "CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\nConnection: close\r\n\r\n";
+    let req =
+        "CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\nConnection: close\r\n\r\n";
     stream.write_all(req.as_bytes()).await.unwrap();
     let mut resp_buf = [0u8; 1024];
     let n = stream.read(&mut resp_buf).await.unwrap();
@@ -213,4 +230,3 @@ async fn test_live_forward_proxy_standard_auth_challenge() {
     shutdown_tx.send(true).unwrap();
     let _ = server_task.await;
 }
-

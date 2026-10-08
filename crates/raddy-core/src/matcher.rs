@@ -1,10 +1,10 @@
-use std::collections::{HashMap, HashSet};
-use std::net::IpAddr;
+use crate::config::{FileMatcherConfig, MatcherSet};
+use crate::context::Context;
+use crate::placeholder::{PlaceholderProvider, Replacer, eval_placeholders};
 use ipnet::IpNet;
 use regex::Regex;
-use crate::context::Context;
-use crate::config::{MatcherSet, FileMatcherConfig};
-use crate::placeholder::{eval_placeholders, PlaceholderProvider, Replacer};
+use std::collections::{HashMap, HashSet};
+use std::net::IpAddr;
 
 pub const PRIVATE_RANGES: &[&str] = &[
     "192.168.0.0/16",
@@ -364,7 +364,10 @@ impl RemoteIpMatcher {
             }
         }
 
-        Self { networks, exact_ips }
+        Self {
+            networks,
+            exact_ips,
+        }
     }
 }
 
@@ -397,19 +400,28 @@ pub struct ProtocolMatcher {
 
 impl ProtocolMatcher {
     pub fn new(protocol: String) -> Self {
-        Self { protocol: protocol.to_lowercase() }
+        Self {
+            protocol: protocol.to_lowercase(),
+        }
     }
 }
 
 impl Matcher for ProtocolMatcher {
     fn matches(&self, ctx: &Context) -> bool {
-        let scheme = ctx.get_placeholder("scheme").unwrap_or_else(|| "http".to_string()).to_lowercase();
+        let scheme = ctx
+            .get_placeholder("scheme")
+            .unwrap_or_else(|| "http".to_string())
+            .to_lowercase();
         if self.protocol == "http" {
             scheme == "http"
         } else if self.protocol == "https" {
             scheme == "https" || ctx.tls_server_name.is_some()
         } else if self.protocol == "grpc" {
-            let content_type = ctx.headers.get(http::header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).unwrap_or("");
+            let content_type = ctx
+                .headers
+                .get(http::header::CONTENT_TYPE)
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("");
             content_type.starts_with("application/grpc")
         } else {
             scheme == self.protocol
@@ -432,8 +444,13 @@ impl VarsMatcher {
 impl Matcher for VarsMatcher {
     fn matches(&self, ctx: &Context) -> bool {
         for (k, expected) in &self.vars {
-            let clean_k = k.strip_prefix('{').and_then(|s| s.strip_suffix('}')).unwrap_or(k);
-            let actual = ctx.get_placeholder(clean_k).or_else(|| ctx.vars.get(clean_k).cloned());
+            let clean_k = k
+                .strip_prefix('{')
+                .and_then(|s| s.strip_suffix('}'))
+                .unwrap_or(k);
+            let actual = ctx
+                .get_placeholder(clean_k)
+                .or_else(|| ctx.vars.get(clean_k).cloned());
             match actual {
                 Some(ref val) => {
                     let exp = eval_placeholders(expected, ctx);
@@ -467,8 +484,14 @@ impl VarsRegexpMatcher {
 impl Matcher for VarsRegexpMatcher {
     fn matches(&self, ctx: &Context) -> bool {
         for (k, re) in &self.patterns {
-            let clean_k = k.strip_prefix('{').and_then(|s| s.strip_suffix('}')).unwrap_or(k);
-            let actual = ctx.get_placeholder(clean_k).or_else(|| ctx.vars.get(clean_k).cloned()).unwrap_or_default();
+            let clean_k = k
+                .strip_prefix('{')
+                .and_then(|s| s.strip_suffix('}'))
+                .unwrap_or(k);
+            let actual = ctx
+                .get_placeholder(clean_k)
+                .or_else(|| ctx.vars.get(clean_k).cloned())
+                .unwrap_or_default();
             if !re.is_match(&actual) {
                 return false;
             }
@@ -491,7 +514,10 @@ impl FileMatcher {
 
 impl Matcher for FileMatcher {
     fn matches(&self, ctx: &Context) -> bool {
-        let root = self.config.root.as_deref()
+        let root = self
+            .config
+            .root
+            .as_deref()
             .or_else(|| ctx.get_var("root"))
             .unwrap_or(".");
         let root_path = std::path::Path::new(root);
@@ -513,6 +539,468 @@ impl Matcher for FileMatcher {
         }
         false
     }
+}
+
+/// Matches CEL-like expressions, e.g. `{http.error.status_code} == 404` or `int({http.error.status_code}) in [404, 410]`.
+#[derive(Debug, Clone)]
+pub struct ExpressionMatcher {
+    pub expression: String,
+}
+
+impl ExpressionMatcher {
+    pub fn new(expression: String) -> Self {
+        Self { expression }
+    }
+}
+
+impl Matcher for ExpressionMatcher {
+    fn matches(&self, ctx: &Context) -> bool {
+        let evaluated = eval_placeholders(&self.expression, ctx);
+        eval_expression(&evaluated, ctx)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum ExprToken {
+    Int(i64),
+    Float(f64),
+    Str(String),
+    Bool(bool),
+    Ident(String),
+    Eq,
+    Ne,
+    Le,
+    Ge,
+    Lt,
+    Gt,
+    And,
+    Or,
+    Not,
+    In,
+    LParen,
+    RParen,
+    LBracket,
+    RBracket,
+    Comma,
+}
+
+fn tokenize_expr(input: &str) -> Vec<ExprToken> {
+    let mut tokens = Vec::new();
+    let chars: Vec<char> = input.chars().collect();
+    let mut i = 0;
+    let n = chars.len();
+
+    while i < n {
+        let c = chars[i];
+        if c.is_whitespace() {
+            i += 1;
+            continue;
+        }
+
+        if i + 1 < n {
+            match (c, chars[i + 1]) {
+                ('&', '&') => {
+                    tokens.push(ExprToken::And);
+                    i += 2;
+                    continue;
+                }
+                ('|', '|') => {
+                    tokens.push(ExprToken::Or);
+                    i += 2;
+                    continue;
+                }
+                ('=', '=') => {
+                    tokens.push(ExprToken::Eq);
+                    i += 2;
+                    continue;
+                }
+                ('!', '=') => {
+                    tokens.push(ExprToken::Ne);
+                    i += 2;
+                    continue;
+                }
+                ('<', '=') => {
+                    tokens.push(ExprToken::Le);
+                    i += 2;
+                    continue;
+                }
+                ('>', '=') => {
+                    tokens.push(ExprToken::Ge);
+                    i += 2;
+                    continue;
+                }
+                _ => {}
+            }
+        }
+
+        match c {
+            '<' => {
+                tokens.push(ExprToken::Lt);
+                i += 1;
+                continue;
+            }
+            '>' => {
+                tokens.push(ExprToken::Gt);
+                i += 1;
+                continue;
+            }
+            '!' => {
+                tokens.push(ExprToken::Not);
+                i += 1;
+                continue;
+            }
+            '(' => {
+                tokens.push(ExprToken::LParen);
+                i += 1;
+                continue;
+            }
+            ')' => {
+                tokens.push(ExprToken::RParen);
+                i += 1;
+                continue;
+            }
+            '[' => {
+                tokens.push(ExprToken::LBracket);
+                i += 1;
+                continue;
+            }
+            ']' => {
+                tokens.push(ExprToken::RBracket);
+                i += 1;
+                continue;
+            }
+            ',' => {
+                tokens.push(ExprToken::Comma);
+                i += 1;
+                continue;
+            }
+            '"' | '\'' => {
+                let quote = c;
+                i += 1;
+                let mut s = String::new();
+                let mut escaped = false;
+                while i < n {
+                    let ch = chars[i];
+                    if escaped {
+                        s.push(ch);
+                        escaped = false;
+                    } else if ch == '\\' {
+                        escaped = true;
+                    } else if ch == quote {
+                        i += 1;
+                        break;
+                    } else {
+                        s.push(ch);
+                    }
+                    i += 1;
+                }
+                tokens.push(ExprToken::Str(s));
+                continue;
+            }
+            _ => {}
+        }
+
+        if c.is_ascii_digit() {
+            let mut num_str = String::new();
+            let mut is_float = false;
+            while i < n && (chars[i].is_ascii_digit() || chars[i] == '.') {
+                if chars[i] == '.' {
+                    if is_float {
+                        break;
+                    }
+                    is_float = true;
+                }
+                num_str.push(chars[i]);
+                i += 1;
+            }
+            if is_float {
+                if let Ok(f) = num_str.parse::<f64>() {
+                    tokens.push(ExprToken::Float(f));
+                }
+            } else if let Ok(int_val) = num_str.parse::<i64>() {
+                tokens.push(ExprToken::Int(int_val));
+            }
+            continue;
+        }
+
+        if c.is_alphabetic() || c == '_' {
+            let mut id = String::new();
+            while i < n
+                && (chars[i].is_alphanumeric()
+                    || chars[i] == '_'
+                    || chars[i] == '.'
+                    || chars[i] == '-')
+            {
+                id.push(chars[i]);
+                i += 1;
+            }
+            match id.as_str() {
+                "true" => tokens.push(ExprToken::Bool(true)),
+                "false" => tokens.push(ExprToken::Bool(false)),
+                "in" => tokens.push(ExprToken::In),
+                _ => tokens.push(ExprToken::Ident(id)),
+            }
+            continue;
+        }
+
+        i += 1;
+    }
+
+    tokens
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum ExprVal {
+    Null,
+    Bool(bool),
+    Int(i64),
+    Float(f64),
+    Str(String),
+    List(Vec<ExprVal>),
+}
+
+impl ExprVal {
+    fn is_truthy(&self) -> bool {
+        match self {
+            ExprVal::Bool(b) => *b,
+            ExprVal::Int(n) => *n != 0,
+            ExprVal::Float(f) => *f != 0.0,
+            ExprVal::Str(s) => !s.is_empty() && s != "false" && s != "0",
+            ExprVal::List(l) => !l.is_empty(),
+            ExprVal::Null => false,
+        }
+    }
+
+    fn as_f64(&self) -> Option<f64> {
+        match self {
+            ExprVal::Int(n) => Some(*n as f64),
+            ExprVal::Float(f) => Some(*f),
+            ExprVal::Str(s) => s.trim().parse::<f64>().ok(),
+            _ => None,
+        }
+    }
+
+    fn as_i64(&self) -> Option<i64> {
+        match self {
+            ExprVal::Int(n) => Some(*n),
+            ExprVal::Float(f) => Some(*f as i64),
+            ExprVal::Str(s) => s.trim().parse::<i64>().ok(),
+            _ => None,
+        }
+    }
+
+    fn as_str(&self) -> String {
+        match self {
+            ExprVal::Str(s) => s.clone(),
+            ExprVal::Int(n) => n.to_string(),
+            ExprVal::Float(f) => f.to_string(),
+            ExprVal::Bool(b) => b.to_string(),
+            ExprVal::List(_) => "[...]".to_string(),
+            ExprVal::Null => "".to_string(),
+        }
+    }
+
+    fn eq_val(&self, other: &Self) -> bool {
+        if let (Some(a), Some(b)) = (self.as_i64(), other.as_i64()) {
+            return a == b;
+        }
+        if let (Some(a), Some(b)) = (self.as_f64(), other.as_f64()) {
+            return (a - b).abs() < f64::EPSILON;
+        }
+        match (self, other) {
+            (ExprVal::Bool(a), ExprVal::Bool(b)) => a == b,
+            (ExprVal::Null, ExprVal::Null) => true,
+            _ => self.as_str() == other.as_str(),
+        }
+    }
+
+    fn cmp_val(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        if let (Some(a), Some(b)) = (self.as_i64(), other.as_i64()) {
+            return Some(a.cmp(&b));
+        }
+        if let (Some(a), Some(b)) = (self.as_f64(), other.as_f64()) {
+            return a.partial_cmp(&b);
+        }
+        Some(self.as_str().cmp(&other.as_str()))
+    }
+}
+
+struct ExprParser<'a> {
+    tokens: &'a [ExprToken],
+    pos: usize,
+    ctx: &'a Context,
+}
+
+impl<'a> ExprParser<'a> {
+    fn peek(&self) -> Option<&ExprToken> {
+        self.tokens.get(self.pos)
+    }
+
+    fn next(&mut self) -> Option<ExprToken> {
+        let tok = self.tokens.get(self.pos).cloned();
+        if tok.is_some() {
+            self.pos += 1;
+        }
+        tok
+    }
+
+    fn parse_or(&mut self) -> ExprVal {
+        let mut left = self.parse_and();
+        while let Some(ExprToken::Or) = self.peek() {
+            self.next();
+            let right = self.parse_and();
+            left = ExprVal::Bool(left.is_truthy() || right.is_truthy());
+        }
+        left
+    }
+
+    fn parse_and(&mut self) -> ExprVal {
+        let mut left = self.parse_not();
+        while let Some(ExprToken::And) = self.peek() {
+            self.next();
+            let right = self.parse_not();
+            left = ExprVal::Bool(left.is_truthy() && right.is_truthy());
+        }
+        left
+    }
+
+    fn parse_not(&mut self) -> ExprVal {
+        if let Some(ExprToken::Not) = self.peek() {
+            self.next();
+            let val = self.parse_not();
+            return ExprVal::Bool(!val.is_truthy());
+        }
+        self.parse_comparison()
+    }
+
+    fn parse_comparison(&mut self) -> ExprVal {
+        let left = self.parse_primary();
+        match self.peek() {
+            Some(ExprToken::Eq) => {
+                self.next();
+                let right = self.parse_primary();
+                ExprVal::Bool(left.eq_val(&right))
+            }
+            Some(ExprToken::Ne) => {
+                self.next();
+                let right = self.parse_primary();
+                ExprVal::Bool(!left.eq_val(&right))
+            }
+            Some(ExprToken::Lt) => {
+                self.next();
+                let right = self.parse_primary();
+                let res = left.cmp_val(&right).map(|o| o.is_lt()).unwrap_or(false);
+                ExprVal::Bool(res)
+            }
+            Some(ExprToken::Le) => {
+                self.next();
+                let right = self.parse_primary();
+                let res = left.cmp_val(&right).map(|o| o.is_le()).unwrap_or(false);
+                ExprVal::Bool(res)
+            }
+            Some(ExprToken::Gt) => {
+                self.next();
+                let right = self.parse_primary();
+                let res = left.cmp_val(&right).map(|o| o.is_gt()).unwrap_or(false);
+                ExprVal::Bool(res)
+            }
+            Some(ExprToken::Ge) => {
+                self.next();
+                let right = self.parse_primary();
+                let res = left.cmp_val(&right).map(|o| o.is_ge()).unwrap_or(false);
+                ExprVal::Bool(res)
+            }
+            Some(ExprToken::In) => {
+                self.next();
+                let right = self.parse_primary();
+                match right {
+                    ExprVal::List(items) => {
+                        let contains = items.iter().any(|item| item.eq_val(&left));
+                        ExprVal::Bool(contains)
+                    }
+                    ExprVal::Str(s) => ExprVal::Bool(s.contains(&left.as_str())),
+                    _ => ExprVal::Bool(false),
+                }
+            }
+            _ => left,
+        }
+    }
+
+    fn parse_primary(&mut self) -> ExprVal {
+        match self.next() {
+            Some(ExprToken::Int(n)) => ExprVal::Int(n),
+            Some(ExprToken::Float(f)) => ExprVal::Float(f),
+            Some(ExprToken::Str(s)) => ExprVal::Str(s),
+            Some(ExprToken::Bool(b)) => ExprVal::Bool(b),
+            Some(ExprToken::LParen) => {
+                let inner = self.parse_or();
+                if let Some(ExprToken::RParen) = self.peek() {
+                    self.next();
+                }
+                inner
+            }
+            Some(ExprToken::LBracket) => {
+                let mut items = Vec::new();
+                while let Some(tok) = self.peek() {
+                    if let ExprToken::RBracket = tok {
+                        self.next();
+                        break;
+                    }
+                    let item = self.parse_or();
+                    items.push(item);
+                    if let Some(ExprToken::Comma) = self.peek() {
+                        self.next();
+                    }
+                }
+                ExprVal::List(items)
+            }
+            Some(ExprToken::Ident(id)) => {
+                if id == "int" && matches!(self.peek(), Some(ExprToken::LParen)) {
+                    self.next();
+                    let inner = self.parse_or();
+                    if let Some(ExprToken::RParen) = self.peek() {
+                        self.next();
+                    }
+                    return ExprVal::Int(inner.as_i64().unwrap_or(0));
+                }
+                let placeholder_val = self.ctx.get_placeholder(&id);
+                let val_opt = if placeholder_val.is_some() {
+                    placeholder_val
+                } else {
+                    self.ctx.vars.get(&id).cloned()
+                };
+                if let Some(val) = val_opt {
+                    if let Ok(i) = val.parse::<i64>() {
+                        ExprVal::Int(i)
+                    } else if let Ok(f) = val.parse::<f64>() {
+                        ExprVal::Float(f)
+                    } else if val == "true" {
+                        ExprVal::Bool(true)
+                    } else if val == "false" {
+                        ExprVal::Bool(false)
+                    } else {
+                        ExprVal::Str(val)
+                    }
+                } else {
+                    ExprVal::Str(id)
+                }
+            }
+            _ => ExprVal::Null,
+        }
+    }
+}
+
+fn eval_expression(expr: &str, ctx: &Context) -> bool {
+    let tokens = tokenize_expr(expr);
+    if tokens.is_empty() {
+        return false;
+    }
+    let mut parser = ExprParser {
+        tokens: &tokens,
+        pos: 0,
+        ctx,
+    };
+    parser.parse_or().is_truthy()
 }
 
 /// Inverted matcher (NOT).
@@ -607,6 +1095,10 @@ impl CompiledMatcherSet {
 
         if let Some(ref file_cfg) = config.file {
             matchers.push(Box::new(FileMatcher::new(file_cfg.clone())));
+        }
+
+        if let Some(ref expr) = config.expression {
+            matchers.push(Box::new(ExpressionMatcher::new(expr.clone())));
         }
 
         if let Some(ref not_sets) = config.not {

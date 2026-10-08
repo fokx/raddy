@@ -1,8 +1,3 @@
-use std::net::IpAddr;
-use std::sync::Arc;
-use ipnet::IpNet;
-use rustls::server::ServerConfig;
-use tokio_rustls::TlsAcceptor;
 use crate::acme::{
     AcmeClient, ChallengeTypePreference, Http01ChallengeStore, LETS_ENCRYPT_PRODUCTION,
     LETS_ENCRYPT_STAGING,
@@ -10,7 +5,12 @@ use crate::acme::{
 use crate::error::Result;
 use crate::local_ca::LocalCa;
 use crate::sni::SniResolver;
-use crate::storage::{parse_certified_key, CertStorage, FileCertStorage};
+use crate::storage::{CertStorage, FileCertStorage, parse_certified_key};
+use ipnet::IpNet;
+use rustls::server::ServerConfig;
+use std::net::IpAddr;
+use std::sync::Arc;
+use tokio_rustls::TlsAcceptor;
 
 pub struct TlsManager {
     local_ca: Arc<LocalCa>,
@@ -119,7 +119,9 @@ impl TlsManager {
 
             // Generate via Local CA
             let (cert_pem, key_pem) = self.local_ca.issue_certificate(&[identifier.to_string()])?;
-            self.storage.store_with_ca(identifier, &cert_pem, &key_pem, None).await?;
+            self.storage
+                .store_with_ca(identifier, &cert_pem, &key_pem, None)
+                .await?;
 
             let certified_key = parse_certified_key(&cert_pem, &key_pem)?;
             self.sni_resolver.insert(identifier, certified_key.clone());
@@ -139,16 +141,33 @@ impl TlsManager {
             }
 
             // Public domain or public IP certificate via ACME (instant-acme)
-            tracing::info!("Requesting ACME certificate for '{}' from CA '{}'...", identifier, self.acme.directory_url());
-            let (cert_pem, key_pem) = self.acme.issue_certificate(&[identifier.to_string()]).await?;
-            self.storage.store_with_ca(identifier, &cert_pem, &key_pem, Some(self.acme.directory_url())).await?;
+            tracing::info!(
+                "Requesting ACME certificate for '{}' from CA '{}'...",
+                identifier,
+                self.acme.directory_url()
+            );
+            let (cert_pem, key_pem) = self
+                .acme
+                .issue_certificate(&[identifier.to_string()])
+                .await?;
+            self.storage
+                .store_with_ca(
+                    identifier,
+                    &cert_pem,
+                    &key_pem,
+                    Some(self.acme.directory_url()),
+                )
+                .await?;
 
             let certified_key = parse_certified_key(&cert_pem, &key_pem)?;
             self.sni_resolver.insert(identifier, certified_key.clone());
             if self.sni_resolver.cert_count() == 1 {
                 self.sni_resolver.set_default(certified_key);
             }
-            tracing::info!("Successfully obtained and installed ACME certificate for '{}'", identifier);
+            tracing::info!(
+                "Successfully obtained and installed ACME certificate for '{}'",
+                identifier
+            );
         }
 
         Ok(())

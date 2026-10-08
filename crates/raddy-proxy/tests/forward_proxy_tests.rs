@@ -17,7 +17,10 @@ async fn test_forward_proxy_auth_and_credentials() {
 
     // 2. Wrong scheme
     let wrong_scheme = HeaderValue::from_static("Bearer token123");
-    assert_eq!(auth.check(Some(&wrong_scheme)), Err(AuthError::UnsupportedScheme));
+    assert_eq!(
+        auth.check(Some(&wrong_scheme)),
+        Err(AuthError::UnsupportedScheme)
+    );
 
     // 3. Wrong credentials
     let wrong_creds = HeaderValue::from_str(&format!(
@@ -25,7 +28,10 @@ async fn test_forward_proxy_auth_and_credentials() {
         AuthConfig::encode_credentials("user1", "wrongpass")
     ))
     .unwrap();
-    assert!(matches!(auth.check(Some(&wrong_creds)), Err(AuthError::InvalidCredentials(_))));
+    assert!(matches!(
+        auth.check(Some(&wrong_creds)),
+        Err(AuthError::InvalidCredentials(_))
+    ));
 
     // 4. Correct credentials
     let correct = HeaderValue::from_str(&format!(
@@ -42,19 +48,35 @@ async fn test_forward_proxy_acl_rules() {
 
     // Default ACL denies localhost
     let localhost_ip = "127.0.0.1".parse().unwrap();
-    assert!(!raddy_proxy::forward::acl::is_host_allowed(&deny_local, "localhost", localhost_ip));
+    assert!(!raddy_proxy::forward::acl::is_host_allowed(
+        &deny_local,
+        "localhost",
+        localhost_ip
+    ));
 
     let private_ip = "192.168.1.50".parse().unwrap();
-    assert!(!raddy_proxy::forward::acl::is_host_allowed(&deny_local, "internal.lan", private_ip));
+    assert!(!raddy_proxy::forward::acl::is_host_allowed(
+        &deny_local,
+        "internal.lan",
+        private_ip
+    ));
 
     // Public IP allowed by default `allow all` at the end
     let public_ip = "93.184.216.34".parse().unwrap();
-    assert!(raddy_proxy::forward::acl::is_host_allowed(&deny_local, "example.com", public_ip));
+    assert!(raddy_proxy::forward::acl::is_host_allowed(
+        &deny_local,
+        "example.com",
+        public_ip
+    ));
 
     // Custom ACL: allow all first overrides default deny
     let mut custom_rules = vec![new_acl_rule("all", true).unwrap()];
     custom_rules.extend(default_acl_suffix_rules());
-    assert!(raddy_proxy::forward::acl::is_host_allowed(&custom_rules, "localhost", localhost_ip));
+    assert!(raddy_proxy::forward::acl::is_host_allowed(
+        &custom_rules,
+        "localhost",
+        localhost_ip
+    ));
 
     // Custom domain ACL
     let domain_rules = vec![
@@ -62,10 +84,26 @@ async fn test_forward_proxy_acl_rules() {
         new_acl_rule("deny.com", false).unwrap(),
         new_acl_rule("all", false).unwrap(),
     ];
-    assert!(raddy_proxy::forward::acl::is_host_allowed(&domain_rules, "sub.trusted.com", public_ip));
-    assert!(raddy_proxy::forward::acl::is_host_allowed(&domain_rules, "trusted.com", public_ip));
-    assert!(!raddy_proxy::forward::acl::is_host_allowed(&domain_rules, "deny.com", public_ip));
-    assert!(!raddy_proxy::forward::acl::is_host_allowed(&domain_rules, "untrusted.com", public_ip));
+    assert!(raddy_proxy::forward::acl::is_host_allowed(
+        &domain_rules,
+        "sub.trusted.com",
+        public_ip
+    ));
+    assert!(raddy_proxy::forward::acl::is_host_allowed(
+        &domain_rules,
+        "trusted.com",
+        public_ip
+    ));
+    assert!(!raddy_proxy::forward::acl::is_host_allowed(
+        &domain_rules,
+        "deny.com",
+        public_ip
+    ));
+    assert!(!raddy_proxy::forward::acl::is_host_allowed(
+        &domain_rules,
+        "untrusted.com",
+        public_ip
+    ));
 }
 
 #[tokio::test]
@@ -76,7 +114,10 @@ async fn test_forward_proxy_pac_serving() {
     let handler = ForwardProxyHandler::from_config(&config_map).unwrap();
 
     let mut headers = HeaderMap::new();
-    headers.insert(http::header::HOST, HeaderValue::from_static("proxy.example.com:8443"));
+    headers.insert(
+        http::header::HOST,
+        HeaderValue::from_static("proxy.example.com:8443"),
+    );
 
     let mut ctx = Context::new(
         Method::GET,
@@ -110,7 +151,10 @@ async fn test_forward_proxy_probe_resistance() {
 
     // 1. Visit normal host with wrong credentials: acts as if proxy doesn't exist (transparent passthrough)
     let mut headers = HeaderMap::new();
-    headers.insert(http::header::HOST, HeaderValue::from_static("normal-host.com"));
+    headers.insert(
+        http::header::HOST,
+        HeaderValue::from_static("normal-host.com"),
+    );
     let mut ctx = Context::new(
         Method::GET,
         Uri::from_static("http://normal-host.com/"),
@@ -118,11 +162,17 @@ async fn test_forward_proxy_probe_resistance() {
         Bytes::new(),
     );
     handler.handle(&mut ctx).await.unwrap();
-    assert!(!ctx.response_written, "Should pass through to next handler without writing response");
+    assert!(
+        !ctx.response_written,
+        "Should pass through to next handler without writing response"
+    );
 
     // 2. Visit secret probe resistance link with wrong credentials: returns 407 hidden page
     let mut headers_secret = HeaderMap::new();
-    headers_secret.insert(http::header::HOST, HeaderValue::from_static("secret-domain.test"));
+    headers_secret.insert(
+        http::header::HOST,
+        HeaderValue::from_static("secret-domain.test"),
+    );
     let mut ctx_secret = Context::new(
         Method::GET,
         Uri::from_static("http://secret-domain.test/"),
@@ -131,14 +181,20 @@ async fn test_forward_proxy_probe_resistance() {
     );
     handler.handle(&mut ctx_secret).await.unwrap();
     assert!(ctx_secret.response_written);
-    assert_eq!(ctx_secret.status, Some(StatusCode::PROXY_AUTHENTICATION_REQUIRED));
+    assert_eq!(
+        ctx_secret.status,
+        Some(StatusCode::PROXY_AUTHENTICATION_REQUIRED)
+    );
     let body = String::from_utf8(ctx_secret.response_body.unwrap().to_vec()).unwrap();
     assert!(body.contains("Hidden Proxy Page"));
     assert!(body.contains("Please authenticate yourself to the proxy."));
 
     // 3. Visit secret probe resistance link with valid credentials: returns 200 hidden page
     let mut headers_auth = HeaderMap::new();
-    headers_auth.insert(http::header::HOST, HeaderValue::from_static("secret-domain.test"));
+    headers_auth.insert(
+        http::header::HOST,
+        HeaderValue::from_static("secret-domain.test"),
+    );
     headers_auth.insert(
         "proxy-authorization",
         HeaderValue::from_str(&format!(
@@ -174,7 +230,10 @@ async fn test_forward_proxy_port_restrictions() {
 
     // Port 8080 should be forbidden
     let mut headers = HeaderMap::new();
-    headers.insert(http::header::HOST, HeaderValue::from_static("127.0.0.1:8080"));
+    headers.insert(
+        http::header::HOST,
+        HeaderValue::from_static("127.0.0.1:8080"),
+    );
     let mut ctx = Context::new(
         Method::CONNECT,
         Uri::from_static("127.0.0.1:8080"),
@@ -237,7 +296,10 @@ async fn test_forward_proxy_connect_tunneling_end_to_end() {
         Bytes::new(),
     );
     handler.handle(&mut ctx_unauth).await.unwrap();
-    assert_eq!(ctx_unauth.status, Some(StatusCode::PROXY_AUTHENTICATION_REQUIRED));
+    assert_eq!(
+        ctx_unauth.status,
+        Some(StatusCode::PROXY_AUTHENTICATION_REQUIRED)
+    );
 
     // 4. Test authenticated CONNECT
     let mut headers_auth = HeaderMap::new();

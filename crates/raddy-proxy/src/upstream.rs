@@ -5,6 +5,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 #[derive(Debug)]
 pub struct Upstream {
     pub dial: String,
+    pub host: String,
+    pub port: u16,
+    pub is_tls: bool,
     is_healthy: AtomicBool,
     active_requests: AtomicUsize,
     fail_count: AtomicUsize,
@@ -13,13 +16,23 @@ pub struct Upstream {
 
 impl Upstream {
     pub fn new(dial: impl Into<String>) -> Self {
+        let raw = dial.into();
+        let target = crate::transport::parse_upstream_target(&raw, false);
         Self {
-            dial: dial.into(),
+            dial: target.dial_addr,
+            host: target.host,
+            port: target.port,
+            is_tls: target.is_tls,
             is_healthy: AtomicBool::new(true),
             active_requests: AtomicUsize::new(0),
             fail_count: AtomicUsize::new(0),
             unhealthy_until: AtomicI64::new(0),
         }
+    }
+
+    pub fn with_tls(mut self, tls: bool) -> Self {
+        self.is_tls = tls;
+        self
     }
 
     /// Determines if the upstream is currently healthy and eligible for requests.

@@ -110,7 +110,9 @@ impl Dispenser {
         };
 
         if let Some(tok) = self.tokens.get(self.cursor) {
-            tok.span.line == cur_line && tok.kind != TokenKind::Newline && tok.kind != TokenKind::Eof
+            tok.span.line == cur_line
+                && tok.kind != TokenKind::Newline
+                && tok.kind != TokenKind::Eof
         } else {
             false
         }

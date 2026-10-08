@@ -86,9 +86,14 @@ impl<'a> Lexer<'a> {
             // Line continuation with backslash \
             if c == '\\' {
                 if let Some(next_c) = self.peek_next() {
-                    if next_c == '\n' || (next_c == '\r' && self.chars.get(self.cursor + 2).map(|&(_, ch)| ch) == Some('\n')) {
+                    if next_c == '\n'
+                        || (next_c == '\r'
+                            && self.chars.get(self.cursor + 2).map(|&(_, ch)| ch) == Some('\n'))
+                    {
                         self.advance(); // consume \
-                        if self.peek() == Some('\r') { self.advance(); }
+                        if self.peek() == Some('\r') {
+                            self.advance();
+                        }
                         self.advance(); // consume \n
                         continue;
                     }
@@ -241,7 +246,9 @@ impl<'a> Lexer<'a> {
                         }
                     }
                 } else {
-                    return Err(ParseError::UnexpectedEof("Unterminated escape sequence in string".into()));
+                    return Err(ParseError::UnexpectedEof(
+                        "Unterminated escape sequence in string".into(),
+                    ));
                 }
             } else {
                 s.push(c);
@@ -298,8 +305,12 @@ impl<'a> Lexer<'a> {
         }
 
         // Consume newline after marker
-        if self.peek() == Some('\r') { self.advance(); }
-        if self.peek() == Some('\n') { self.advance(); }
+        if self.peek() == Some('\r') {
+            self.advance();
+        }
+        if self.peek() == Some('\n') {
+            self.advance();
+        }
 
         let mut content = String::new();
         let mut current_line = String::new();
@@ -309,11 +320,19 @@ impl<'a> Lexer<'a> {
                 let trimmed = current_line.trim_start();
                 if trimmed.starts_with(&marker) {
                     let rest = &trimmed[marker.len()..];
-                    if rest.is_empty() || rest.starts_with(' ') || rest.starts_with('\t') || rest.starts_with('\r') {
+                    if rest.is_empty()
+                        || rest.starts_with(' ')
+                        || rest.starts_with('\t')
+                        || rest.starts_with('\r')
+                    {
                         let rewind_count = rest.chars().count() + 1; // +1 for '\n'
                         self.cursor = self.cursor.saturating_sub(rewind_count);
-                        if content.ends_with('\n') { content.pop(); }
-                        if content.ends_with('\r') { content.pop(); }
+                        if content.ends_with('\n') {
+                            content.pop();
+                        }
+                        if content.ends_with('\r') {
+                            content.pop();
+                        }
                         return Ok(content);
                     }
                 }
@@ -329,11 +348,19 @@ impl<'a> Lexer<'a> {
         let trimmed = current_line.trim_start();
         if trimmed.starts_with(&marker) {
             let rest = &trimmed[marker.len()..];
-            if rest.is_empty() || rest.starts_with(' ') || rest.starts_with('\t') || rest.starts_with('\r') {
+            if rest.is_empty()
+                || rest.starts_with(' ')
+                || rest.starts_with('\t')
+                || rest.starts_with('\r')
+            {
                 let rewind_count = rest.chars().count();
                 self.cursor = self.cursor.saturating_sub(rewind_count);
-                if content.ends_with('\n') { content.pop(); }
-                if content.ends_with('\r') { content.pop(); }
+                if content.ends_with('\n') {
+                    content.pop();
+                }
+                if content.ends_with('\r') {
+                    content.pop();
+                }
                 return Ok(content);
             }
         }

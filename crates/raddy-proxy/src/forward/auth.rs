@@ -1,5 +1,5 @@
-use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
+use base64::engine::general_purpose::STANDARD as BASE64;
 use http::HeaderValue;
 use subtle::ConstantTimeEq;
 use thiserror::Error;

@@ -80,7 +80,11 @@ example.com, www.example.com {
     // Verify automatic https settings were adapted from global options
     assert!(srv_https.automatic_https.is_some());
     assert_eq!(
-        srv_https.automatic_https.as_ref().unwrap().disable_redirects,
+        srv_https
+            .automatic_https
+            .as_ref()
+            .unwrap()
+            .disable_redirects,
         Some(true)
     );
 
@@ -150,9 +154,15 @@ fn test_upstream_caddyfile_adapt_suite() {
         }
     }
 
-    println!("Upstream Caddyfile adaptation test results: {} / {} passed", passed, total);
+    println!(
+        "Upstream Caddyfile adaptation test results: {} / {} passed",
+        passed, total
+    );
     assert!(total > 200, "Expected at least 200 tests");
-    assert_eq!(passed, total, "All valid Caddy upstream tests should adapt successfully");
+    assert_eq!(
+        passed, total,
+        "All valid Caddy upstream tests should adapt successfully"
+    );
 }
 
 #[test]
@@ -179,7 +189,10 @@ fn test_caddyfile_global_servers_protocols() {
     let http = config.http_app().expect("Missing http app");
     assert!(http.servers.contains_key("srv_:443"));
     let srv443 = &http.servers["srv_:443"];
-    assert_eq!(srv443.protocols, Some(vec!["h1".to_string(), "h2".to_string()]));
+    assert_eq!(
+        srv443.protocols,
+        Some(vec!["h1".to_string(), "h2".to_string()])
+    );
 }
 
 #[test]
@@ -222,31 +235,47 @@ fn test_user_caddyfile_handle_path_and_fileserver_adaptation() {
 
     // Find the routes
     // 1. Check handle_path route comes BEFORE file_server route
-    let handle_path_idx = srv443.routes.iter().position(|r| {
-        r.handle.iter().any(|h| h.handler == "subroute")
-    }).expect("handle_path subroute should exist");
+    let handle_path_idx = srv443
+        .routes
+        .iter()
+        .position(|r| r.handle.iter().any(|h| h.handler == "subroute"))
+        .expect("handle_path subroute should exist");
 
-    let file_server_idx = srv443.routes.iter().position(|r| {
-        r.handle.iter().any(|h| h.handler == "file_server")
-    }).expect("file_server route should exist");
+    let file_server_idx = srv443
+        .routes
+        .iter()
+        .position(|r| r.handle.iter().any(|h| h.handler == "file_server"))
+        .expect("file_server route should exist");
 
-    assert!(handle_path_idx < file_server_idx, "handle_path (idx {}) must come before file_server (idx {})", handle_path_idx, file_server_idx);
+    assert!(
+        handle_path_idx < file_server_idx,
+        "handle_path (idx {}) must come before file_server (idx {})",
+        handle_path_idx,
+        file_server_idx
+    );
 
     // 2. Check root was properly extracted for file_server { root /var/www/html }
     let fs_route = &srv443.routes[file_server_idx];
     let fs_handler = &fs_route.handle[0];
-    assert_eq!(fs_handler.details.get("root").and_then(|v| v.as_str()), Some("/var/www/html"));
+    assert_eq!(
+        fs_handler.details.get("root").and_then(|v| v.as_str()),
+        Some("/var/www/html")
+    );
 
     // 3. Check handle_path subroute has strip_path_prefix and hide
     let hp_route = &srv443.routes[handle_path_idx];
     let hp_subroute = &hp_route.handle[0];
     let subroutes_val = hp_subroute.details.get("routes").unwrap();
-    let subroutes: Vec<raddy_core::config::Route> = serde_json::from_value(subroutes_val.clone()).unwrap();
-    
+    let subroutes: Vec<raddy_core::config::Route> =
+        serde_json::from_value(subroutes_val.clone()).unwrap();
+
     // First route inside handle_path subroute is rewrite
     assert_eq!(subroutes[0].handle[0].handler, "rewrite");
     assert_eq!(
-        subroutes[0].handle[0].details.get("strip_path_prefix").and_then(|v| v.as_str()),
+        subroutes[0].handle[0]
+            .details
+            .get("strip_path_prefix")
+            .and_then(|v| v.as_str()),
         Some("/fasdddddddr3wfesdewfasdASFASde21qwfesdq3rd2qewklas")
     );
 
@@ -255,8 +284,18 @@ fn test_user_caddyfile_handle_path_and_fileserver_adaptation() {
 
     // Third route inside handle_path subroute is file_server with hide: [".git"]
     assert_eq!(subroutes[2].handle[0].handler, "file_server");
-    assert_eq!(subroutes[2].handle[0].details.get("browse").and_then(|v| v.as_bool()), Some(true));
-    let hide = subroutes[2].handle[0].details.get("hide").and_then(|v| v.as_array()).unwrap();
+    assert_eq!(
+        subroutes[2].handle[0]
+            .details
+            .get("browse")
+            .and_then(|v| v.as_bool()),
+        Some(true)
+    );
+    let hide = subroutes[2].handle[0]
+        .details
+        .get("hide")
+        .and_then(|v| v.as_array())
+        .unwrap();
     assert_eq!(hide[0].as_str(), Some(".git"));
 }
 
@@ -291,21 +330,49 @@ xjtu.app, xjtu.men, kr.pig2.de {
     let srv443 = &http.servers["srv_:443"];
 
     // Find routes for kr.pig2.de
-    let kr_routes: Vec<&raddy_core::config::Route> = srv443.routes.iter().filter(|r| {
-        r.r#match.as_ref().map(|m| m.iter().any(|ms| ms.host.as_ref().map(|h| h.contains(&"kr.pig2.de".to_string())).unwrap_or(false))).unwrap_or(false)
-    }).collect();
+    let kr_routes: Vec<&raddy_core::config::Route> = srv443
+        .routes
+        .iter()
+        .filter(|r| {
+            r.r#match
+                .as_ref()
+                .map(|m| {
+                    m.iter().any(|ms| {
+                        ms.host
+                            .as_ref()
+                            .map(|h| h.contains(&"kr.pig2.de".to_string()))
+                            .unwrap_or(false)
+                    })
+                })
+                .unwrap_or(false)
+        })
+        .collect();
 
-    assert_eq!(kr_routes.len(), 4, "Should have 4 handle routes for kr.pig2.de");
+    assert_eq!(
+        kr_routes.len(),
+        4,
+        "Should have 4 handle routes for kr.pig2.de"
+    );
 
     // All handle routes must share the same group
-    let grp = kr_routes[0].group.as_ref().expect("Handle route should have group");
+    let grp = kr_routes[0]
+        .group
+        .as_ref()
+        .expect("Handle route should have group");
     for r in &kr_routes {
-        assert_eq!(r.group.as_ref(), Some(grp), "All handle routes in the site must share the same group");
+        assert_eq!(
+            r.group.as_ref(),
+            Some(grp),
+            "All handle routes in the site must share the same group"
+        );
     }
 
     // Route 0 is @static
     let m0 = &kr_routes[0].r#match.as_ref().unwrap()[0];
-    let paths = m0.path.as_ref().expect("@static must have path matcher populated from single-line syntax");
+    let paths = m0
+        .path
+        .as_ref()
+        .expect("@static must have path matcher populated from single-line syntax");
     assert!(paths.contains(&"/_app/*".to_string()));
     assert!(paths.contains(&"/favicon.ico".to_string()));
 
@@ -357,17 +424,17 @@ fn test_caddyfile_forward_proxy_adaptation() {
     assert_eq!(handler_cfg.details.get("hide_ip").unwrap(), &true);
     assert_eq!(handler_cfg.details.get("hide_via").unwrap(), &true);
     assert_eq!(
-        handler_cfg.details.get("disable_insecure_upstreams_check").unwrap(),
+        handler_cfg
+            .details
+            .get("disable_insecure_upstreams_check")
+            .unwrap(),
         &true
     );
     assert_eq!(
         handler_cfg.details.get("pac_path").unwrap(),
         &"/my-proxy.pac"
     );
-    assert_eq!(
-        handler_cfg.details.get("dial_timeout").unwrap(),
-        &"15s"
-    );
+    assert_eq!(handler_cfg.details.get("dial_timeout").unwrap(), &"15s");
     assert_eq!(handler_cfg.details.get("max_idle_conns").unwrap(), &100);
     assert_eq!(
         handler_cfg.details.get("max_idle_conns_per_host").unwrap(),
@@ -400,6 +467,3 @@ fn test_caddyfile_forward_proxy_adaptation() {
     let acl = handler_cfg.details.get("acl").unwrap().as_array().unwrap();
     assert_eq!(acl.len(), 3);
 }
-
-
-

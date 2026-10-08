@@ -65,7 +65,12 @@ pub fn set_path(root: &mut Value, path: &str, new_val: Value) -> Result<(), Stri
                         return Err(format!("Index {} out of bounds (len: {})", idx, arr.len()));
                     }
                 }
-                _ => return Err(format!("Cannot set field on non-container node at '{}'", seg)),
+                _ => {
+                    return Err(format!(
+                        "Cannot set field on non-container node at '{}'",
+                        seg
+                    ));
+                }
             }
         } else {
             // Intermediate node: descend or create Object
@@ -104,11 +109,17 @@ pub fn patch_path(root: &mut Value, path: &str, patch_val: Value) -> Result<(), 
             for seg in segments {
                 match current {
                     Value::Object(map) => {
-                        current = map.get_mut(seg).ok_or_else(|| format!("Path '{}' not found", path))?;
+                        current = map
+                            .get_mut(seg)
+                            .ok_or_else(|| format!("Path '{}' not found", path))?;
                     }
                     Value::Array(arr) => {
-                        let idx: usize = seg.parse().map_err(|_| format!("Invalid array index '{}'", seg))?;
-                        current = arr.get_mut(idx).ok_or_else(|| format!("Index {} not found", idx))?;
+                        let idx: usize = seg
+                            .parse()
+                            .map_err(|_| format!("Invalid array index '{}'", seg))?;
+                        current = arr
+                            .get_mut(idx)
+                            .ok_or_else(|| format!("Index {} not found", idx))?;
                     }
                     _ => return Err(format!("Cannot patch non-container node at '{}'", seg)),
                 }
@@ -149,7 +160,9 @@ pub fn delete_path(root: &mut Value, path: &str) -> Result<(), String> {
                     }
                 }
                 Value::Array(arr) => {
-                    let idx: usize = seg.parse().map_err(|_| format!("Invalid array index '{}'", seg))?;
+                    let idx: usize = seg
+                        .parse()
+                        .map_err(|_| format!("Invalid array index '{}'", seg))?;
                     if idx < arr.len() {
                         arr.remove(idx);
                         return Ok(());
@@ -162,11 +175,17 @@ pub fn delete_path(root: &mut Value, path: &str) -> Result<(), String> {
         } else {
             match current {
                 Value::Object(map) => {
-                    current = map.get_mut(*seg).ok_or_else(|| format!("Path segment '{}' not found", seg))?;
+                    current = map
+                        .get_mut(*seg)
+                        .ok_or_else(|| format!("Path segment '{}' not found", seg))?;
                 }
                 Value::Array(arr) => {
-                    let idx: usize = seg.parse().map_err(|_| format!("Invalid index '{}'", seg))?;
-                    current = arr.get_mut(idx).ok_or_else(|| format!("Index {} not found", idx))?;
+                    let idx: usize = seg
+                        .parse()
+                        .map_err(|_| format!("Invalid index '{}'", seg))?;
+                    current = arr
+                        .get_mut(idx)
+                        .ok_or_else(|| format!("Index {} not found", idx))?;
                 }
                 _ => return Err(format!("Cannot descend into non-container at '{}'", seg)),
             }
@@ -221,7 +240,8 @@ pub fn unsynced_config_access(
     body: &[u8],
 ) -> Result<Option<Value>, String> {
     let payload: Option<Value> = if !body.is_empty() {
-        let val: Value = serde_json::from_slice(body).map_err(|e| format!("decoding request body: {}", e))?;
+        let val: Value =
+            serde_json::from_slice(body).map_err(|e| format!("decoding request body: {}", e))?;
         Some(val)
     } else {
         None
@@ -276,7 +296,9 @@ pub fn unsynced_config_access(
                 if is_second_to_last && map.get(part).map(|v| v.is_array()).unwrap_or(false) {
                     let arr = map.get_mut(part).unwrap().as_array_mut().unwrap();
                     let idx_str = parts[i + 1];
-                    let idx: usize = idx_str.parse().map_err(|_| format!("invalid array index '{}'", idx_str))?;
+                    let idx: usize = idx_str
+                        .parse()
+                        .map_err(|_| format!("invalid array index '{}'", idx_str))?;
 
                     match method {
                         "GET" => {
@@ -287,7 +309,9 @@ pub fn unsynced_config_access(
                         }
                         "POST" => {
                             if ellipses {
-                                let val_arr = payload.and_then(|v| v.as_array().cloned()).ok_or("final element is not an array")?;
+                                let val_arr = payload
+                                    .and_then(|v| v.as_array().cloned())
+                                    .ok_or("final element is not an array")?;
                                 arr.extend(val_arr);
                             } else {
                                 arr.push(payload.unwrap_or(Value::Null));
@@ -326,7 +350,9 @@ pub fn unsynced_config_access(
                             let entry = map.get_mut(part).unwrap();
                             if let Value::Array(arr) = entry {
                                 if ellipses {
-                                    let val_arr = payload.and_then(|v| v.as_array().cloned()).ok_or("final element is not an array")?;
+                                    let val_arr = payload
+                                        .and_then(|v| v.as_array().cloned())
+                                        .ok_or("final element is not an array")?;
                                     arr.extend(val_arr);
                                 } else {
                                     arr.push(payload.unwrap_or(Value::Null));
@@ -354,7 +380,9 @@ pub fn unsynced_config_access(
                 current = map.get_mut(part).unwrap();
             }
             Value::Array(arr) => {
-                let idx: usize = part.parse().map_err(|_| format!("invalid array index '{}'", part))?;
+                let idx: usize = part
+                    .parse()
+                    .map_err(|_| format!("invalid array index '{}'", part))?;
                 if is_last {
                     match method {
                         "GET" => {
@@ -406,8 +434,14 @@ mod tests {
 
     #[test]
     fn test_parse_path_segments() {
-        assert_eq!(parse_path_segments("/apps/http/servers/"), vec!["apps", "http", "servers"]);
-        assert_eq!(parse_path_segments("logging/logs/default"), vec!["logging", "logs", "default"]);
+        assert_eq!(
+            parse_path_segments("/apps/http/servers/"),
+            vec!["apps", "http", "servers"]
+        );
+        assert_eq!(
+            parse_path_segments("logging/logs/default"),
+            vec!["logging", "logs", "default"]
+        );
         assert_eq!(parse_path_segments("///"), Vec::<&str>::new());
     }
 
@@ -433,12 +467,28 @@ mod tests {
         assert_eq!(get_path(&config, "/apps/http/non_existent"), None);
 
         // Set value
-        set_path(&mut config, "/apps/http/servers/srv0/listen/0", json!(":8080")).unwrap();
-        assert_eq!(get_path(&config, "/apps/http/servers/srv0/listen/0"), Some(&json!(":8080")));
+        set_path(
+            &mut config,
+            "/apps/http/servers/srv0/listen/0",
+            json!(":8080"),
+        )
+        .unwrap();
+        assert_eq!(
+            get_path(&config, "/apps/http/servers/srv0/listen/0"),
+            Some(&json!(":8080"))
+        );
 
         // Set nested new path
-        set_path(&mut config, "/apps/tls/automation/policies/0", json!({"tag": "local"})).unwrap();
-        assert_eq!(get_path(&config, "/apps/tls/automation/policies/0/tag"), Some(&json!("local")));
+        set_path(
+            &mut config,
+            "/apps/tls/automation/policies/0",
+            json!({"tag": "local"}),
+        )
+        .unwrap();
+        assert_eq!(
+            get_path(&config, "/apps/tls/automation/policies/0/tag"),
+            Some(&json!("local"))
+        );
     }
 
     #[test]
@@ -455,10 +505,24 @@ mod tests {
         });
 
         // Patch default log
-        patch_path(&mut config, "/logging/logs/default", json!({"level": "DEBUG", "new_opt": true})).unwrap();
-        assert_eq!(get_path(&config, "/logging/logs/default/level"), Some(&json!("DEBUG")));
-        assert_eq!(get_path(&config, "/logging/logs/default/writer"), Some(&json!("stdout")));
-        assert_eq!(get_path(&config, "/logging/logs/default/new_opt"), Some(&json!(true)));
+        patch_path(
+            &mut config,
+            "/logging/logs/default",
+            json!({"level": "DEBUG", "new_opt": true}),
+        )
+        .unwrap();
+        assert_eq!(
+            get_path(&config, "/logging/logs/default/level"),
+            Some(&json!("DEBUG"))
+        );
+        assert_eq!(
+            get_path(&config, "/logging/logs/default/writer"),
+            Some(&json!("stdout"))
+        );
+        assert_eq!(
+            get_path(&config, "/logging/logs/default/new_opt"),
+            Some(&json!(true))
+        );
 
         // Delete field
         delete_path(&mut config, "/logging/logs/default/writer").unwrap();

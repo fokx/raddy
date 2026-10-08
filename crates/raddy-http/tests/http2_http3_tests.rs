@@ -1,4 +1,3 @@
-use std::sync::Arc;
 use bytes::Buf;
 use http::{Method, Request, StatusCode};
 use quinn::crypto::rustls::QuicClientConfig;
@@ -11,6 +10,7 @@ use raddy_http::server::HttpServerInstance;
 use raddy_tls::LocalCa;
 use raddy_tls::sni::SniResolver;
 use raddy_tls::storage::parse_certified_key;
+use std::sync::Arc;
 
 fn setup_test_server_instance(route_body: &str) -> (HttpServerInstance, LocalCa) {
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
@@ -20,7 +20,8 @@ fn setup_test_server_instance(route_body: &str) -> (HttpServerInstance, LocalCa)
         .issue_certificate(&["localhost".into(), "127.0.0.1".into()])
         .expect("Failed to issue cert");
 
-    let certified_key = parse_certified_key(&cert_pem, &key_pem).expect("Failed to parse certified key");
+    let certified_key =
+        parse_certified_key(&cert_pem, &key_pem).expect("Failed to parse certified key");
 
     let sni_resolver = Arc::new(SniResolver::new());
     sni_resolver.insert("localhost", certified_key.clone());
@@ -33,7 +34,8 @@ fn setup_test_server_instance(route_body: &str) -> (HttpServerInstance, LocalCa)
     server_config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
 
     let tls_acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(server_config.clone()));
-    let quic_config = build_quic_server_config(&server_config).expect("Failed to build QUIC config");
+    let quic_config =
+        build_quic_server_config(&server_config).expect("Failed to build QUIC config");
 
     let mut server = HttpServer::default();
     server.listen = vec!["127.0.0.1:0".into()];
@@ -66,9 +68,7 @@ async fn test_http2_alpn_negotiation_and_alt_svc() {
     let bound_addr = instance.local_addr().expect("Missing bound addr");
 
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
-    let server_task = tokio::spawn(async move {
-        instance.run(shutdown_rx).await
-    });
+    let server_task = tokio::spawn(async move { instance.run(shutdown_rx).await });
 
     // Setup reqwest client with root CA
     let cert = reqwest::Certificate::from_pem(ca.ca_cert_pem().as_bytes()).unwrap();
@@ -81,13 +81,24 @@ async fn test_http2_alpn_negotiation_and_alt_svc() {
     let url = format!("https://localhost:{}/test", bound_addr.port());
 
     // Send HTTP/2 request
-    let resp = client.get(&url).send().await.expect("Failed to send request");
+    let resp = client
+        .get(&url)
+        .send()
+        .await
+        .expect("Failed to send request");
 
     assert_eq!(resp.status(), reqwest::StatusCode::OK);
-    assert_eq!(resp.version(), reqwest::Version::HTTP_2, "Expected HTTP/2 ALPN negotiation");
+    assert_eq!(
+        resp.version(),
+        reqwest::Version::HTTP_2,
+        "Expected HTTP/2 ALPN negotiation"
+    );
 
     // Check Alt-Svc header advertising HTTP/3
-    let alt_svc = resp.headers().get("alt-svc").expect("Missing Alt-Svc header");
+    let alt_svc = resp
+        .headers()
+        .get("alt-svc")
+        .expect("Missing Alt-Svc header");
     let alt_svc_str = alt_svc.to_str().unwrap();
     assert!(
         alt_svc_str.contains(&format!("h3=\":{}\"", bound_addr.port())),
@@ -124,17 +135,20 @@ async fn test_http3_quic_end_to_end_and_graceful_shutdown() {
     instance.bind().await.expect("Failed to bind server");
     let bound_addr = instance.local_addr().expect("Missing bound addr");
 
-    assert!(instance.quic_endpoint.is_some(), "QUIC endpoint should be active");
+    assert!(
+        instance.quic_endpoint.is_some(),
+        "QUIC endpoint should be active"
+    );
 
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
-    let server_task = tokio::spawn(async move {
-        instance.run(shutdown_rx).await
-    });
+    let server_task = tokio::spawn(async move { instance.run(shutdown_rx).await });
 
     // Build client trusting the local CA for QUIC
     let mut root_store = rustls::RootCertStore::empty();
     let mut ca_reader = std::io::Cursor::new(ca.ca_cert_pem().as_bytes());
-    let ca_certs = rustls_pemfile::certs(&mut ca_reader).collect::<std::result::Result<Vec<_>, _>>().unwrap();
+    let ca_certs = rustls_pemfile::certs(&mut ca_reader)
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .unwrap();
     for c in ca_certs {
         root_store.add(c).unwrap();
     }
@@ -151,8 +165,14 @@ async fn test_http3_quic_end_to_end_and_graceful_shutdown() {
     client_endpoint.set_default_client_config(quinn_client_cfg);
 
     // 1. Establish QUIC connection to the same port as HTTPS
-    let quic_conn = client_endpoint.connect(bound_addr, "localhost").unwrap().await.expect("QUIC connect failed");
-    let (mut driver, mut send_request) = h3::client::new(h3_quinn::Connection::new(quic_conn)).await.expect("H3 client handshake failed");
+    let quic_conn = client_endpoint
+        .connect(bound_addr, "localhost")
+        .unwrap()
+        .await
+        .expect("QUIC connect failed");
+    let (mut driver, mut send_request) = h3::client::new(h3_quinn::Connection::new(quic_conn))
+        .await
+        .expect("H3 client handshake failed");
 
     tokio::spawn(async move {
         let _ = std::future::poll_fn(|cx| driver.poll_close(cx)).await;
@@ -165,10 +185,19 @@ async fn test_http3_quic_end_to_end_and_graceful_shutdown() {
         .body(())
         .unwrap();
 
-    let mut stream = send_request.send_request(get_req).await.expect("Failed to send H3 request");
-    stream.finish().await.expect("Failed to finish request stream");
+    let mut stream = send_request
+        .send_request(get_req)
+        .await
+        .expect("Failed to send H3 request");
+    stream
+        .finish()
+        .await
+        .expect("Failed to finish request stream");
 
-    let resp = stream.recv_response().await.expect("Failed to receive H3 response");
+    let resp = stream
+        .recv_response()
+        .await
+        .expect("Failed to receive H3 response");
     assert_eq!(resp.status(), StatusCode::OK);
 
     let mut body_bytes = Vec::new();
@@ -178,7 +207,10 @@ async fn test_http3_quic_end_to_end_and_graceful_shutdown() {
             body_bytes.push(chunk.get_u8());
         }
     }
-    assert_eq!(String::from_utf8(body_bytes).unwrap(), "HTTP/3 response via QUIC!");
+    assert_eq!(
+        String::from_utf8(body_bytes).unwrap(),
+        "HTTP/3 response via QUIC!"
+    );
 
     // 3. Send POST request with body on the same H3 connection
     let post_req = Request::builder()
@@ -187,15 +219,26 @@ async fn test_http3_quic_end_to_end_and_graceful_shutdown() {
         .body(())
         .unwrap();
 
-    let mut stream2 = send_request.send_request(post_req).await.expect("Failed to send second H3 request");
-    stream2.send_data(bytes::Bytes::from("Streaming data over HTTP/3")).await.unwrap();
-    stream2.finish().await.expect("Failed to finish post stream");
+    let mut stream2 = send_request
+        .send_request(post_req)
+        .await
+        .expect("Failed to send second H3 request");
+    stream2
+        .send_data(bytes::Bytes::from("Streaming data over HTTP/3"))
+        .await
+        .unwrap();
+    stream2
+        .finish()
+        .await
+        .expect("Failed to finish post stream");
 
-    let resp2 = stream2.recv_response().await.expect("Failed to receive H3 response 2");
+    let resp2 = stream2
+        .recv_response()
+        .await
+        .expect("Failed to receive H3 response 2");
     assert_eq!(resp2.status(), StatusCode::OK);
 
     // 4. Graceful shutdown
     shutdown_tx.send(true).unwrap();
     server_task.await.unwrap().unwrap();
 }
-

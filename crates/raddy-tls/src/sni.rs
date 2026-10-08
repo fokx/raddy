@@ -1,8 +1,8 @@
-use std::collections::HashMap;
-use std::sync::Arc;
 use parking_lot::RwLock;
 use rustls::server::{ClientHello, ResolvesServerCert};
 use rustls::sign::CertifiedKey;
+use std::collections::HashMap;
+use std::sync::Arc;
 
 /// SNI-based certificate resolver implementing `rustls::server::ResolvesServerCert`.
 #[derive(Clone, Default)]
@@ -55,7 +55,10 @@ impl std::fmt::Debug for SniResolver {
         f.debug_struct("SniResolver")
             .field("exact_count", &self.exact_certs.read().len())
             .field("wildcard_count", &self.wildcard_certs.read().len())
-            .field("alpn_challenge_count", &self.alpn_challenge_certs.read().len())
+            .field(
+                "alpn_challenge_count",
+                &self.alpn_challenge_certs.read().len(),
+            )
             .finish()
     }
 }

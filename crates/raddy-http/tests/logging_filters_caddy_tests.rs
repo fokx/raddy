@@ -1,16 +1,11 @@
-use std::collections::HashMap;
+use raddy_http::logging::{FilterAction, apply_filter, mask_ip_string, sha256_short_hex};
 use regex::Regex;
-use raddy_http::logging::{
-    apply_filter, mask_ip_string, sha256_short_hex, FilterAction,
-};
 use serde_json::json;
+use std::collections::HashMap;
 
 #[test]
 fn test_ip_mask_single_value() {
-    assert_eq!(
-        mask_ip_string("255.255.255.255", 16, 32),
-        "255.255.0.0"
-    );
+    assert_eq!(mask_ip_string("255.255.255.255", 16, 32), "255.255.0.0");
     assert_eq!(
         mask_ip_string("ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff", 16, 32),
         "ffff:ffff::"
@@ -160,7 +155,10 @@ fn test_set_cookie_filter() {
     apply_filter(&mut val, &["set_cookie".into()], &action);
 
     assert_eq!(val["set_cookie"].as_array().unwrap().len(), 3);
-    assert_eq!(val["set_cookie"][0], "foo=\"REDACTED\"; Path=/; Priority=High");
+    assert_eq!(
+        val["set_cookie"][0],
+        "foo=\"REDACTED\"; Path=/; Priority=High"
+    );
     assert_eq!(val["set_cookie"][1], "hash=1a06df82; Path=/; HttpOnly");
     assert_eq!(val["set_cookie"][2], "baz=e; Path=/; SameSite=Strict");
 }

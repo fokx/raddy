@@ -1,16 +1,16 @@
-use std::net::SocketAddr;
-use std::sync::Arc;
 use hyper_util::rt::{TokioExecutor, TokioIo};
 use hyper_util::server::conn::auto::Builder;
-use tokio::net::TcpListener;
-use tokio::sync::watch;
-use tokio_rustls::TlsAcceptor;
 use raddy_core::config::Config;
 use raddy_core::module::ModuleRegistry;
 use raddy_tls::TlsManager;
+use std::net::SocketAddr;
+use std::sync::Arc;
+use tokio::net::TcpListener;
+use tokio::sync::watch;
+use tokio_rustls::TlsAcceptor;
 
 use crate::error::{HttpServerError, Result};
-use crate::router::{compile_virtual_host_router, VirtualHostRouter};
+use crate::router::{VirtualHostRouter, compile_virtual_host_router};
 use crate::service::handle_request;
 
 /// A running HTTP or HTTPS server instance bound to a TCP address (and optionally a UDP address for HTTP/3).
@@ -31,7 +31,11 @@ pub struct HttpServerInstance {
 }
 
 impl HttpServerInstance {
-    pub fn new(name: impl Into<String>, listen_addr: impl Into<String>, router: VirtualHostRouter) -> Self {
+    pub fn new(
+        name: impl Into<String>,
+        listen_addr: impl Into<String>,
+        router: VirtualHostRouter,
+    ) -> Self {
         Self {
             name: name.into(),
             listen_addr: listen_addr.into(),
@@ -86,7 +90,10 @@ impl HttpServerInstance {
 
         if self.listen_addr.starts_with(':') {
             let port: u16 = self.listen_addr[1..].parse().map_err(|e| {
-                HttpServerError::Server(format!("Invalid port in listen_addr '{}': {}", self.listen_addr, e))
+                HttpServerError::Server(format!(
+                    "Invalid port in listen_addr '{}': {}",
+                    self.listen_addr, e
+                ))
             })?;
 
             // 1. Bind IPv4 (0.0.0.0:port)
@@ -140,7 +147,10 @@ impl HttpServerInstance {
             }
             if bound_listeners.is_empty() {
                 return Err(last_err.unwrap_or_else(|| {
-                    HttpServerError::Server(format!("Failed to resolve address: {}", self.listen_addr))
+                    HttpServerError::Server(format!(
+                        "Failed to resolve address: {}",
+                        self.listen_addr
+                    ))
                 }));
             }
         }
@@ -154,12 +164,20 @@ impl HttpServerInstance {
                 if let Some(&primary_addr) = self.local_addrs.first() {
                     match quinn::Endpoint::server(quic_cfg, primary_addr) {
                         Ok(ep) => {
-                            tracing::info!("Server '{}' [HTTP/3 QUIC] successfully bound to UDP {}", self.name, primary_addr);
+                            tracing::info!(
+                                "Server '{}' [HTTP/3 QUIC] successfully bound to UDP {}",
+                                self.name,
+                                primary_addr
+                            );
                             self.quic_endpoint = Some(ep);
                             self.alt_svc_port = Some(primary_addr.port());
                         }
                         Err(e) => {
-                            tracing::warn!("Failed to bind QUIC endpoint on UDP {}: {}", primary_addr, e);
+                            tracing::warn!(
+                                "Failed to bind QUIC endpoint on UDP {}: {}",
+                                primary_addr,
+                                e
+                            );
                         }
                     }
                 }
@@ -167,12 +185,26 @@ impl HttpServerInstance {
         }
 
         let proto = if self.tls_acceptor.is_some() {
-            if self.quic_endpoint.is_some() { "HTTPS (HTTP/1.1, HTTP/2, HTTP/3)" } else { "HTTPS (HTTP/1.1, HTTP/2)" }
+            if self.quic_endpoint.is_some() {
+                "HTTPS (HTTP/1.1, HTTP/2, HTTP/3)"
+            } else {
+                "HTTPS (HTTP/1.1, HTTP/2)"
+            }
         } else {
             "HTTP (HTTP/1.1, HTTP/2 Cleartext)"
         };
-        let addrs_str = self.local_addrs.iter().map(|a| a.to_string()).collect::<Vec<_>>().join(", ");
-        tracing::info!("Server '{}' [{}] successfully bound to {}", self.name, proto, addrs_str);
+        let addrs_str = self
+            .local_addrs
+            .iter()
+            .map(|a| a.to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        tracing::info!(
+            "Server '{}' [{}] successfully bound to {}",
+            self.name,
+            proto,
+            addrs_str
+        );
         Ok(())
     }
 
@@ -188,7 +220,9 @@ impl HttpServerInstance {
     pub async fn run(mut self, mut shutdown_rx: watch::Receiver<bool>) -> Result<()> {
         let listeners = std::mem::take(&mut self.listeners);
         if listeners.is_empty() {
-            return Err(HttpServerError::Server("Server instance not bound. Call bind() first.".into()));
+            return Err(HttpServerError::Server(
+                "Server instance not bound. Call bind() first.".into(),
+            ));
         }
 
         let router = self.router.clone();
@@ -415,9 +449,17 @@ impl ServerManager {
         if let Some(http) = config.http_app() {
             for (name, srv_cfg) in &http.servers {
                 let vhost_router = compile_virtual_host_router(srv_cfg, registry)?;
-                let listen_addr = srv_cfg.listen.first().cloned().unwrap_or_else(|| ":80".into());
-                let is_tls = listen_addr.ends_with(":443") || srv_cfg.tls_connection_policies.is_some();
-                let protocols = srv_cfg.protocols.clone().unwrap_or_else(|| vec!["h1".into(), "h2".into(), "h3".into()]);
+                let listen_addr = srv_cfg
+                    .listen
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| ":80".into());
+                let is_tls =
+                    listen_addr.ends_with(":443") || srv_cfg.tls_connection_policies.is_some();
+                let protocols = srv_cfg
+                    .protocols
+                    .clone()
+                    .unwrap_or_else(|| vec!["h1".into(), "h2".into(), "h3".into()]);
 
                 let mut instance = HttpServerInstance::new(name, listen_addr, vhost_router)
                     .with_protocols(protocols)
@@ -439,22 +481,41 @@ impl ServerManager {
                                                 let force_internal = srv_cfg
                                                     .tls_connection_policies
                                                     .as_ref()
-                                                    .map(|pols| pols.iter().any(|p| {
-                                                        p.certificate_selection
-                                                             .as_ref()
-                                                             .and_then(|cs| cs.any_tag.as_ref())
-                                                             .map(|tags| tags.iter().any(|t| t == "internal"))
-                                                             .unwrap_or(false)
-                                                     }))
+                                                    .map(|pols| {
+                                                        pols.iter().any(|p| {
+                                                            p.certificate_selection
+                                                                .as_ref()
+                                                                .and_then(|cs| cs.any_tag.as_ref())
+                                                                .map(|tags| {
+                                                                    tags.iter()
+                                                                        .any(|t| t == "internal")
+                                                                })
+                                                                .unwrap_or(false)
+                                                        })
+                                                    })
                                                     .unwrap_or(false);
 
-                                                if force_internal || raddy_tls::manager::is_local_or_private(h) {
-                                                    if let Err(e) = tls.provision_identifier(h, true).await {
-                                                        tracing::warn!("Failed to auto-provision internal cert for '{}': {}", h, e);
+                                                if force_internal
+                                                    || raddy_tls::manager::is_local_or_private(h)
+                                                {
+                                                    if let Err(e) =
+                                                        tls.provision_identifier(h, true).await
+                                                    {
+                                                        tracing::warn!(
+                                                            "Failed to auto-provision internal cert for '{}': {}",
+                                                            h,
+                                                            e
+                                                        );
                                                     }
                                                 } else if tls.cert_exists(h).await {
-                                                    if let Err(e) = tls.provision_identifier(h, false).await {
-                                                        tracing::warn!("Failed to load cached cert for '{}': {}", h, e);
+                                                    if let Err(e) =
+                                                        tls.provision_identifier(h, false).await
+                                                    {
+                                                        tracing::warn!(
+                                                            "Failed to load cached cert for '{}': {}",
+                                                            h,
+                                                            e
+                                                        );
                                                     }
                                                 } else {
                                                     // Queue for ACME provisioning once listeners are bound and running!
@@ -474,7 +535,9 @@ impl ServerManager {
                         }
 
                         if let Ok(rustls_cfg) = tls.build_server_config() {
-                            if let Ok(quic_cfg) = crate::http3::build_quic_server_config(&rustls_cfg) {
+                            if let Ok(quic_cfg) =
+                                crate::http3::build_quic_server_config(&rustls_cfg)
+                            {
                                 instance = instance.with_quic_config(quic_cfg);
                             }
                         }
@@ -484,7 +547,6 @@ impl ServerManager {
                 servers.push(instance);
             }
         }
-
 
         Ok(Self {
             servers,
@@ -521,9 +583,7 @@ impl ServerManager {
 
         for srv in self.servers {
             let rx = shutdown_tx.subscribe();
-            join_set.spawn(async move {
-                srv.run(rx).await
-            });
+            join_set.spawn(async move { srv.run(rx).await });
         }
 
         (join_set, shutdown_tx)
@@ -556,11 +616,13 @@ impl ServerManager {
     pub async fn provision_pending_acme(&self, tls: &Arc<TlsManager>) -> Result<()> {
         for identifier in &self.pending_acme {
             if let Err(e) = tls.provision_identifier(identifier, false).await {
-                tracing::warn!("Failed to auto-provision ACME certificate for '{}': {}", identifier, e);
+                tracing::warn!(
+                    "Failed to auto-provision ACME certificate for '{}': {}",
+                    identifier,
+                    e
+                );
             }
         }
         Ok(())
     }
 }
-
-

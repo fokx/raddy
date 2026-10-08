@@ -1,4 +1,3 @@
-use std::sync::Arc;
 use bytes::Bytes;
 use http::{HeaderMap, HeaderValue, Method, StatusCode, Uri};
 use raddy_core::context::Context;
@@ -7,6 +6,7 @@ use raddy_proxy::headers::HeaderMutator;
 use raddy_proxy::load_balancer::*;
 use raddy_proxy::proxy::ReverseProxyHandler;
 use raddy_proxy::upstream::Upstream;
+use std::sync::Arc;
 
 #[test]
 fn test_load_balancer_round_robin() {
@@ -16,7 +16,12 @@ fn test_load_balancer_round_robin() {
     let upstreams = vec![u1.clone(), u2.clone(), u3.clone()];
 
     let lb = RoundRobin::new();
-    let ctx = Context::new(Method::GET, Uri::from_static("/"), HeaderMap::new(), Bytes::new());
+    let ctx = Context::new(
+        Method::GET,
+        Uri::from_static("/"),
+        HeaderMap::new(),
+        Bytes::new(),
+    );
 
     let s1 = lb.select(&upstreams, &ctx).unwrap();
     let s2 = lb.select(&upstreams, &ctx).unwrap();
@@ -44,7 +49,12 @@ fn test_load_balancer_least_conn() {
 
     let upstreams = vec![u1, u2.clone(), u3];
     let lb = LeastConn;
-    let ctx = Context::new(Method::GET, Uri::from_static("/"), HeaderMap::new(), Bytes::new());
+    let ctx = Context::new(
+        Method::GET,
+        Uri::from_static("/"),
+        HeaderMap::new(),
+        Bytes::new(),
+    );
 
     let selected = lb.select(&upstreams, &ctx).unwrap();
     assert_eq!(selected.dial, "127.0.0.1:8002");
@@ -57,7 +67,12 @@ fn test_load_balancer_ip_hash() {
     let upstreams = vec![u1, u2];
     let lb = IpHash;
 
-    let mut ctx1 = Context::new(Method::GET, Uri::from_static("/"), HeaderMap::new(), Bytes::new());
+    let mut ctx1 = Context::new(
+        Method::GET,
+        Uri::from_static("/"),
+        HeaderMap::new(),
+        Bytes::new(),
+    );
     ctx1.remote_addr = Some("192.168.1.50:1234".parse().unwrap());
 
     let sel1 = lb.select(&upstreams, &ctx1).unwrap();
@@ -69,21 +84,35 @@ fn test_load_balancer_ip_hash() {
 #[test]
 fn test_header_mutator_rules() {
     let mut mutator = HeaderMutator::new();
-    mutator.header_up_set.insert("X-Custom-Req".into(), "CustomVal-{remote_host}".into());
+    mutator
+        .header_up_set
+        .insert("X-Custom-Req".into(), "CustomVal-{remote_host}".into());
     mutator.header_up_delete.push("X-Delete-Me".into());
-    mutator.header_down_set.insert("X-Proxy-By".into(), "Raddy".into());
+    mutator
+        .header_down_set
+        .insert("X-Proxy-By".into(), "Raddy".into());
     mutator.header_down_delete.push("Server".into());
 
-    let mut ctx = Context::new(Method::GET, Uri::from_static("/"), HeaderMap::new(), Bytes::new());
+    let mut ctx = Context::new(
+        Method::GET,
+        Uri::from_static("/"),
+        HeaderMap::new(),
+        Bytes::new(),
+    );
     ctx.remote_addr = Some("10.0.0.1:9999".parse().unwrap());
-    ctx.headers.insert("Host", HeaderValue::from_static("example.com"));
-    ctx.headers.insert("X-Delete-Me", HeaderValue::from_static("secret"));
+    ctx.headers
+        .insert("Host", HeaderValue::from_static("example.com"));
+    ctx.headers
+        .insert("X-Delete-Me", HeaderValue::from_static("secret"));
 
     // 1. Apply header_up
     let mut req_headers = ctx.headers.clone();
     mutator.apply_header_up(&mut req_headers, &ctx);
 
-    assert_eq!(req_headers.get("X-Custom-Req").unwrap(), "CustomVal-10.0.0.1");
+    assert_eq!(
+        req_headers.get("X-Custom-Req").unwrap(),
+        "CustomVal-10.0.0.1"
+    );
     assert!(req_headers.get("X-Delete-Me").is_none());
     assert_eq!(req_headers.get("x-forwarded-for").unwrap(), "10.0.0.1");
     assert_eq!(req_headers.get("x-forwarded-proto").unwrap(), "http");
@@ -136,16 +165,27 @@ async fn test_live_reverse_proxy_end_to_end() {
 
     // 2. Setup ReverseProxyHandler
     let upstream = Arc::new(Upstream::new(backend_addr.to_string()));
-    let handler = ReverseProxyHandler::new(vec![upstream], Box::new(RoundRobin::new()), HeaderMutator::new());
+    let handler = ReverseProxyHandler::new(
+        vec![upstream],
+        Box::new(RoundRobin::new()),
+        HeaderMutator::new(),
+    );
 
     // 3. Dispatch request through ReverseProxyHandler
-    let mut ctx = Context::new(Method::GET, Uri::from_static("/test"), HeaderMap::new(), Bytes::new());
+    let mut ctx = Context::new(
+        Method::GET,
+        Uri::from_static("/test"),
+        HeaderMap::new(),
+        Bytes::new(),
+    );
     ctx.remote_addr = Some("192.168.1.99:4567".parse().unwrap());
     handler.handle(&mut ctx).await.expect("Proxy failed");
 
     assert_eq!(ctx.status, Some(StatusCode::OK));
     assert_eq!(
-        ctx.response_headers.get("X-Backend-Id").and_then(|v| v.to_str().ok()),
+        ctx.response_headers
+            .get("X-Backend-Id")
+            .and_then(|v| v.to_str().ok()),
         Some("backend-1")
     );
     let body_str = String::from_utf8_lossy(ctx.response_body.as_ref().unwrap());
@@ -198,9 +238,15 @@ async fn test_reverse_proxy_failover_and_retries() {
         vec![dead_upstream.clone(), live_upstream],
         Box::new(First),
         HeaderMutator::new(),
-    ).with_retries(2);
+    )
+    .with_retries(2);
 
-    let mut ctx = Context::new(Method::GET, Uri::from_static("/"), HeaderMap::new(), Bytes::new());
+    let mut ctx = Context::new(
+        Method::GET,
+        Uri::from_static("/"),
+        HeaderMap::new(),
+        Bytes::new(),
+    );
     handler.handle(&mut ctx).await.expect("Proxy failed");
 
     assert_eq!(ctx.status, Some(StatusCode::OK));
@@ -258,11 +304,7 @@ async fn test_reverse_proxy_forwards_host_from_uri_authority_when_host_header_mi
     });
 
     let upstream = Arc::new(Upstream::new(backend_addr.to_string()));
-    let handler = ReverseProxyHandler::new(
-        vec![upstream],
-        Box::new(First),
-        HeaderMutator::new(),
-    );
+    let handler = ReverseProxyHandler::new(vec![upstream], Box::new(First), HeaderMutator::new());
 
     // Simulate an HTTP/2 request: no Host header in HeaderMap, authority present in Uri
     let uri: Uri = "https://umami.pig2.de/".parse().unwrap();
@@ -273,7 +315,10 @@ async fn test_reverse_proxy_forwards_host_from_uri_authority_when_host_header_mi
     assert_eq!(ctx.status, Some(StatusCode::OK));
 
     let host = received_host.lock().await.clone();
-    assert_eq!(host, "umami.pig2.de", "Backend should have received Host: umami.pig2.de");
+    assert_eq!(
+        host, "umami.pig2.de",
+        "Backend should have received Host: umami.pig2.de"
+    );
 
     let _ = shutdown_tx.send(true);
 }
@@ -324,14 +369,13 @@ async fn test_reverse_proxy_x_forwarded_host_placeholder_fallback() {
 
     let mut mutator = HeaderMutator::new();
     // Replicate user Caddyfile rule: header_up X-Forwarded-Host {header.X-Forwarded-Host}
-    mutator.header_up_set.insert("X-Forwarded-Host".to_string(), "{header.X-Forwarded-Host}".to_string());
+    mutator.header_up_set.insert(
+        "X-Forwarded-Host".to_string(),
+        "{header.X-Forwarded-Host}".to_string(),
+    );
 
     let upstream = Arc::new(Upstream::new(backend_addr.to_string()));
-    let handler = ReverseProxyHandler::new(
-        vec![upstream],
-        Box::new(First),
-        mutator,
-    );
+    let handler = ReverseProxyHandler::new(vec![upstream], Box::new(First), mutator);
 
     // Request with no incoming X-Forwarded-Host header
     let uri: Uri = "https://kr.pig2.de/".parse().unwrap();
@@ -342,9 +386,10 @@ async fn test_reverse_proxy_x_forwarded_host_placeholder_fallback() {
     assert_eq!(ctx.status, Some(StatusCode::OK));
 
     let xfh = received_xfh.lock().await.clone();
-    assert_eq!(xfh, "kr.pig2.de", "Backend should have received valid host, not literal placeholder");
+    assert_eq!(
+        xfh, "kr.pig2.de",
+        "Backend should have received valid host, not literal placeholder"
+    );
 
     let _ = shutdown_tx.send(true);
 }
-
-

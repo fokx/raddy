@@ -21,20 +21,52 @@ fn test_replacer_replace_all() {
         (r#"\{"json": "object"}"#, r#"{"json": "object"}"#, ""),
         (r#"\{"json": "object"\}"#, r#"{"json": "object"}"#, ""),
         (r#"\{"json": "object{bar}"\}"#, r#"{"json": "object"}"#, ""),
-        (r#"\{"json": \{"nested": "object"\}\}"#, r#"{"json": {"nested": "object"}}"#, ""),
-        (r#"\{"json": \{"nested": "{bar}"\}\}"#, r#"{"json": {"nested": ""}}"#, ""),
-        (r#"pre \{"json": \{"nested": "{bar}"\}\}"#, r#"pre {"json": {"nested": ""}}"#, ""),
-        (r#"\{"json": \{"nested": "{bar}"\}\} post"#, r#"{"json": {"nested": ""}} post"#, ""),
-        (r#"pre \{"json": \{"nested": "{bar}"\}\} post"#, r#"pre {"json": {"nested": ""}} post"#, ""),
+        (
+            r#"\{"json": \{"nested": "object"\}\}"#,
+            r#"{"json": {"nested": "object"}}"#,
+            "",
+        ),
+        (
+            r#"\{"json": \{"nested": "{bar}"\}\}"#,
+            r#"{"json": {"nested": ""}}"#,
+            "",
+        ),
+        (
+            r#"pre \{"json": \{"nested": "{bar}"\}\}"#,
+            r#"pre {"json": {"nested": ""}}"#,
+            "",
+        ),
+        (
+            r#"\{"json": \{"nested": "{bar}"\}\} post"#,
+            r#"{"json": {"nested": ""}} post"#,
+            "",
+        ),
+        (
+            r#"pre \{"json": \{"nested": "{bar}"\}\} post"#,
+            r#"pre {"json": {"nested": ""}} post"#,
+            "",
+        ),
         ("{{", "{{", ""),
         ("{{}", "", ""),
         (r#"{"json": "object"\}"#, "", ""),
         ("{unknown}", "-", "-"),
         (r#"back\slashes"#, r#"back\slashes"#, ""),
         (r#"double back\\slashes"#, r#"double back\\slashes"#, ""),
-        (r#"placeholder {with \{ brace} in name"#, "placeholder  in name", ""),
-        (r#"placeholder {with \} brace} in name"#, "placeholder  in name", ""),
-        (r#"placeholder {with \} \} braces} in name"#, "placeholder  in name", ""),
+        (
+            r#"placeholder {with \{ brace} in name"#,
+            "placeholder  in name",
+            "",
+        ),
+        (
+            r#"placeholder {with \} brace} in name"#,
+            "placeholder  in name",
+            "",
+        ),
+        (
+            r#"placeholder {with \} \} braces} in name"#,
+            "placeholder  in name",
+            "",
+        ),
         (
             r#"\{'group':'default','max_age':3600,'endpoints':[\{'url':'https://some.domain.local/a/d/g'\}],'include_subdomains':true\}"#,
             r#"{'group':'default','max_age':3600,'endpoints':[{'url':'https://some.domain.local/a/d/g'}],'include_subdomains':true}"#,
@@ -46,7 +78,11 @@ fn test_replacer_replace_all() {
 
     for (i, (input, expect, empty)) in cases.into_iter().enumerate() {
         let actual = rep.replace_all(input, empty);
-        assert_eq!(actual, expect, "Test {}: '{}' expected '{}', got '{}'", i, input, expect, actual);
+        assert_eq!(
+            actual, expect,
+            "Test {}: '{}' expected '{}', got '{}'",
+            i, input, expect, actual
+        );
     }
 }
 
@@ -108,19 +144,17 @@ fn test_replacer_replace_known() {
             "{test1} {testEmpty} {asdf} {1} ",
             "val1 EMPTY 123 test-123 ",
         ),
-        (
-            "{te{test1}{as{{df{1}",
-            "{teval1{as{{dftest-123",
-        ),
-        (
-            "{test1} {nope} {1} ",
-            "val1 {nope} test-123 ",
-        ),
+        ("{te{test1}{as{{df{1}", "{teval1{as{{dftest-123"),
+        ("{test1} {nope} {1} ", "val1 {nope} test-123 "),
     ];
 
     for (i, (input, expected)) in cases.into_iter().enumerate() {
         let actual = rep.replace_known(input, "EMPTY");
-        assert_eq!(actual, expected, "Test {}: input '{}' expected '{}', got '{}'", i, input, expected, actual);
+        assert_eq!(
+            actual, expected,
+            "Test {}: input '{}' expected '{}', got '{}'",
+            i, input, expected, actual
+        );
     }
 }
 
@@ -132,17 +166,35 @@ fn test_replacer_new_global() {
 
     let repl = Replacer::new();
 
-    assert_eq!(repl.get("system.slash"), Some(std::path::MAIN_SEPARATOR.to_string()));
-    assert_eq!(repl.get("system.os"), Some(std::env::consts::OS.to_string()));
-    assert_eq!(repl.get("system.arch"), Some(std::env::consts::ARCH.to_string()));
+    assert_eq!(
+        repl.get("system.slash"),
+        Some(std::path::MAIN_SEPARATOR.to_string())
+    );
+    assert_eq!(
+        repl.get("system.os"),
+        Some(std::env::consts::OS.to_string())
+    );
+    assert_eq!(
+        repl.get("system.arch"),
+        Some(std::env::consts::ARCH.to_string())
+    );
     assert!(repl.get("system.wd").is_some());
     assert!(repl.get("system.hostname").is_some());
-    assert_eq!(repl.get("env.CADDY_REPLACER_TEST"), Some("envtest".to_string()));
+    assert_eq!(
+        repl.get("env.CADDY_REPLACER_TEST"),
+        Some("envtest".to_string())
+    );
 }
 
 #[test]
 fn test_replacer_without_file() {
     let repl = Replacer::new().without_file();
-    assert_eq!(repl.get("file.caddytest/integration/testdata/foo.txt"), None);
-    assert_eq!(repl.get("system.os"), Some(std::env::consts::OS.to_string()));
+    assert_eq!(
+        repl.get("file.caddytest/integration/testdata/foo.txt"),
+        None
+    );
+    assert_eq!(
+        repl.get("system.os"),
+        Some(std::env::consts::OS.to_string())
+    );
 }

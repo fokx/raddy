@@ -12,12 +12,13 @@ fn test_dispenser_val_next() {
     );
 
     let assert_next = |d: &mut raddy_caddyfile::caddyfile::Dispenser,
-                           should_load: bool,
-                           expected_cursor: isize,
-                           expected_val: &str| {
+                       should_load: bool,
+                       expected_cursor: isize,
+                       expected_val: &str| {
         let loaded = d.next();
         assert_eq!(
-            loaded, should_load,
+            loaded,
+            should_load,
             "Next(): Expected {} but got {} instead (val '{}')",
             should_load,
             loaded,
@@ -178,7 +179,8 @@ fn test_dispenser_next_line() {
 
 #[test]
 fn test_dispenser_next_block() {
-    let input = "foobar1 {\n\t\t\t  \tsub1 arg1\n\t\t\t  \tsub2\n\t\t\t  }\n\t\t\t  foobar2 {\n\t\t\t  }";
+    let input =
+        "foobar1 {\n\t\t\t  \tsub1 arg1\n\t\t\t  \tsub2\n\t\t\t  }\n\t\t\t  foobar2 {\n\t\t\t  }";
     let mut d = new_test_dispenser(input);
 
     let assert_next_block = |d: &mut raddy_caddyfile::caddyfile::Dispenser,
@@ -307,7 +309,8 @@ fn test_dispenser_args() {
 
 #[test]
 fn test_dispenser_remaining_args() {
-    let input = "dir1 arg1 arg2 arg3\n\t\t\t  dir2 arg4 arg5\n\t\t\t  dir3 arg6 { arg7\n\t\t\t  dir4";
+    let input =
+        "dir1 arg1 arg2 arg3\n\t\t\t  dir2 arg4 arg5\n\t\t\t  dir3 arg6 { arg7\n\t\t\t  dir4";
     let mut d = new_test_dispenser(input);
 
     d.next(); // dir1
@@ -327,7 +330,8 @@ fn test_dispenser_remaining_args() {
 
 #[test]
 fn test_dispenser_remaining_args_as_tokens() {
-    let input = "dir1 arg1 arg2 arg3\n\t\t\t  dir2 arg4 arg5\n\t\t\t  dir3 arg6 { arg7\n\t\t\t  dir4";
+    let input =
+        "dir1 arg1 arg2 arg3\n\t\t\t  dir2 arg4 arg5\n\t\t\t  dir3 arg6 { arg7\n\t\t\t  dir4";
     let mut d = new_test_dispenser(input);
 
     d.next(); // dir1

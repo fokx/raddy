@@ -1,6 +1,3 @@
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::time::Duration;
 use anyhow::{Context, Result};
 use notify::Watcher;
 use raddy_admin::{AdminServer, AppState as AdminAppState};
@@ -8,6 +5,9 @@ use raddy_caddyfile::adapt_caddyfile;
 use raddy_core::config::Config;
 use raddy_core::module::ModuleRegistry;
 use raddy_tls::{ChallengeTypePreference, TlsManager};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::Duration;
 
 use crate::commands::config_ops::load_or_adapt;
 use crate::commands::info::print_environ;
@@ -63,7 +63,11 @@ pub async fn file_server_command(
     let config = adapt_caddyfile(&caddyfile_content, root)
         .map_err(|e| anyhow::anyhow!("Failed to compile file-server config: {}", e))?;
 
-    tracing::info!("Starting instant file server for '{}' on http://{}", root.display(), listen);
+    tracing::info!(
+        "Starting instant file server for '{}' on http://{}",
+        root.display(),
+        listen
+    );
     run_server_loop(config, Path::new(""), None, false, None, false, false).await
 }
 
@@ -90,41 +94,50 @@ async fn run_server_loop(
         .unwrap_or(false);
 
     tracing::info!("Raddy server initializing...");
-    let (email, mut ca_url, mut staging, challenge_pref) = if let Some(tls) = initial_config.tls_app() {
-        let is_staging = tls.staging.unwrap_or(false)
-            || tls.acme_ca.as_deref().map(|ca| ca.contains("staging")).unwrap_or(false);
-        let pref = if tls.disable_http_challenge == Some(true) {
-            ChallengeTypePreference::TlsAlpnOnly
-        } else if tls.disable_tls_alpn_challenge == Some(true) {
-            ChallengeTypePreference::Http01Only
-        } else if let Some(ref chs) = tls.challenges {
-            let has_alpn = chs.iter().any(|c| c == "tls-alpn-01" || c == "tls-alpn");
-            let has_http = chs.iter().any(|c| c == "http-01" || c == "http");
-            if has_alpn && !has_http {
+    let (email, mut ca_url, mut staging, challenge_pref) =
+        if let Some(tls) = initial_config.tls_app() {
+            let is_staging = tls.staging.unwrap_or(false)
+                || tls
+                    .acme_ca
+                    .as_deref()
+                    .map(|ca| ca.contains("staging"))
+                    .unwrap_or(false);
+            let pref = if tls.disable_http_challenge == Some(true) {
                 ChallengeTypePreference::TlsAlpnOnly
-            } else if has_http && !has_alpn {
+            } else if tls.disable_tls_alpn_challenge == Some(true) {
                 ChallengeTypePreference::Http01Only
-            } else if chs.first().map(|c| c == "http-01" || c == "http").unwrap_or(false) {
-                ChallengeTypePreference::Http01First
+            } else if let Some(ref chs) = tls.challenges {
+                let has_alpn = chs.iter().any(|c| c == "tls-alpn-01" || c == "tls-alpn");
+                let has_http = chs.iter().any(|c| c == "http-01" || c == "http");
+                if has_alpn && !has_http {
+                    ChallengeTypePreference::TlsAlpnOnly
+                } else if has_http && !has_alpn {
+                    ChallengeTypePreference::Http01Only
+                } else if chs
+                    .first()
+                    .map(|c| c == "http-01" || c == "http")
+                    .unwrap_or(false)
+                {
+                    ChallengeTypePreference::Http01First
+                } else {
+                    ChallengeTypePreference::TlsAlpnFirst
+                }
             } else {
                 ChallengeTypePreference::TlsAlpnFirst
-            }
+            };
+            (tls.email, tls.acme_ca, is_staging, pref)
         } else {
-            ChallengeTypePreference::TlsAlpnFirst
+            let is_staging = std::env::var("RADDY_ACME_STAGING")
+                .or_else(|_| std::env::var("RADDY_ACME_DEV"))
+                .map(|v| v == "1" || v == "true")
+                .unwrap_or(false);
+            (
+                std::env::var("RADDY_ACME_EMAIL").ok(),
+                std::env::var("RADDY_ACME_CA").ok(),
+                is_staging,
+                ChallengeTypePreference::TlsAlpnFirst,
+            )
         };
-        (tls.email, tls.acme_ca, is_staging, pref)
-    } else {
-        let is_staging = std::env::var("RADDY_ACME_STAGING")
-            .or_else(|_| std::env::var("RADDY_ACME_DEV"))
-            .map(|v| v == "1" || v == "true")
-            .unwrap_or(false);
-        (
-            std::env::var("RADDY_ACME_EMAIL").ok(),
-            std::env::var("RADDY_ACME_CA").ok(),
-            is_staging,
-            ChallengeTypePreference::TlsAlpnFirst,
-        )
-    };
 
     if cli_staging {
         staging = true;
@@ -184,7 +197,10 @@ async fn run_server_loop(
                 }))
             }
             Err(e) => {
-                tracing::warn!("Failed to bind Admin API: {}. Running without Admin API.", e);
+                tracing::warn!(
+                    "Failed to bind Admin API: {}. Running without Admin API.",
+                    e
+                );
                 None
             }
         }
@@ -221,13 +237,19 @@ async fn run_server_loop(
                 // Drain any additional events
                 while rx.try_recv().is_ok() {}
 
-                tracing::info!("Config file '{}' modified, auto-reloading...", watch_path.display());
+                tracing::info!(
+                    "Config file '{}' modified, auto-reloading...",
+                    watch_path.display()
+                );
                 match load_or_adapt(&watch_path, watch_adapter.as_deref()) {
                     Ok(new_cfg) => {
                         if let Err(e) = watch_state.reload(new_cfg).await {
                             tracing::error!("Failed to hot reload modified config: {}", e);
                         } else {
-                            tracing::info!("Successfully reloaded configuration from '{}'", watch_path.display());
+                            tracing::info!(
+                                "Successfully reloaded configuration from '{}'",
+                                watch_path.display()
+                            );
                         }
                     }
                     Err(e) => {
@@ -308,14 +330,22 @@ pub async fn reverse_proxy_command(
     let mut up_lines = String::new();
     for h in headers_up {
         if let Some((k, v)) = h.split_once(':') {
-            up_lines.push_str(&format!("\t\theader_up \"{}\" \"{}\"\n", k.trim(), v.trim()));
+            up_lines.push_str(&format!(
+                "\t\theader_up \"{}\" \"{}\"\n",
+                k.trim(),
+                v.trim()
+            ));
         }
     }
 
     let mut down_lines = String::new();
     for h in headers_down {
         if let Some((k, v)) = h.split_once(':') {
-            down_lines.push_str(&format!("\t\theader_down \"{}\" \"{}\"\n", k.trim(), v.trim()));
+            down_lines.push_str(&format!(
+                "\t\theader_down \"{}\" \"{}\"\n",
+                k.trim(),
+                v.trim()
+            ));
         }
     }
 
@@ -341,6 +371,10 @@ pub async fn reverse_proxy_command(
     let config = adapt_caddyfile(&caddyfile_content, Path::new("."))
         .map_err(|e| anyhow::anyhow!("Failed to compile reverse-proxy config: {}", e))?;
 
-    tracing::info!("Starting instant reverse proxy from http://{} to {}", from, to_str);
+    tracing::info!(
+        "Starting instant reverse proxy from http://{} to {}",
+        from,
+        to_str
+    );
     run_server_loop(config, Path::new(""), None, false, None, false, false).await
 }

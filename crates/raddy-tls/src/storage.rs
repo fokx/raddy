@@ -1,9 +1,9 @@
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use crate::error::{Result, TlsError};
 use async_trait::async_trait;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use rustls::sign::CertifiedKey;
-use crate::error::{Result, TlsError};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 /// Converts an ACME directory URL to a sanitized directory key name matching Caddy/certmagic.
 /// E.g.:
@@ -31,7 +31,8 @@ pub fn ca_dir_key(ca_url: &str) -> String {
 #[async_trait]
 pub trait CertStorage: Send + Sync {
     async fn store(&self, identifier: &str, cert_pem: &str, key_pem: &str) -> Result<()> {
-        self.store_with_ca(identifier, cert_pem, key_pem, None).await
+        self.store_with_ca(identifier, cert_pem, key_pem, None)
+            .await
     }
     async fn store_with_ca(
         &self,
@@ -114,12 +115,11 @@ impl FileCertStorage {
         let home = std::env::var("HOME")
             .or_else(|_| std::env::var("USERPROFILE"))
             .unwrap_or_else(|_| ".".into());
-        let p = PathBuf::from(home).join(".local").join("share").join("caddy");
-        if p.exists() {
-            Some(p)
-        } else {
-            None
-        }
+        let p = PathBuf::from(home)
+            .join(".local")
+            .join("share")
+            .join("caddy");
+        if p.exists() { Some(p) } else { None }
     }
 
     fn sanitize(identifier: &str) -> String {

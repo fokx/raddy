@@ -1,6 +1,6 @@
+use crate::error::{ParseError, ParseResult};
 use std::net::Ipv6Addr;
 use std::str::FromStr;
-use crate::error::{ParseError, ParseResult};
 
 /// Represents a parsed site address matching Caddy's `httpcaddyfile.Address`.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -34,9 +34,10 @@ impl Address {
             s.push_str("://");
         }
 
-        if !self.port.is_empty() &&
-            ((scheme == "https" && self.port != "443") ||
-             (scheme == "http" && self.port != "80")) {
+        if !self.port.is_empty()
+            && ((scheme == "https" && self.port != "443")
+                || (scheme == "http" && self.port != "80"))
+        {
             s.push_str(&join_host_port(&self.host, &self.port));
         } else {
             s.push_str(&self.host);
@@ -57,7 +58,12 @@ impl Address {
         // Check if host is IPv6 and canonicalize (if not IPv4-mapped, matching Go's !ip.Is4In6())
         if let Ok(ip6) = Ipv6Addr::from_str(&host) {
             let segs = ip6.segments();
-            let is_ipv4_mapped = segs[0] == 0 && segs[1] == 0 && segs[2] == 0 && segs[3] == 0 && segs[4] == 0 && segs[5] == 0xffff;
+            let is_ipv4_mapped = segs[0] == 0
+                && segs[1] == 0
+                && segs[2] == 0
+                && segs[3] == 0
+                && segs[4] == 0
+                && segs[5] == 0xffff;
             if !is_ipv4_mapped {
                 host = ip6.to_string();
             }
@@ -133,7 +139,10 @@ pub fn parse_address(str_val: &str) -> ParseResult<Address> {
 
     // extract host and port vs path
     let (host_port_part, path_part) = if let Some(slash_idx) = remaining_str.find('/') {
-        (&remaining_str[..slash_idx], Some(&remaining_str[slash_idx..]))
+        (
+            &remaining_str[..slash_idx],
+            Some(&remaining_str[slash_idx..]),
+        )
     } else {
         (remaining_str, None)
     };

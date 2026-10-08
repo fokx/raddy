@@ -1,5 +1,5 @@
+use anyhow::{Context, Result, bail};
 use std::path::Path;
-use anyhow::{bail, Context, Result};
 
 /// Executes `raddy start` (daemon background launch).
 pub async fn start_command(
@@ -11,7 +11,8 @@ pub async fn start_command(
     staging: bool,
     debug: bool,
 ) -> Result<()> {
-    let current_exe = std::env::current_exe().context("Failed to determine current executable path")?;
+    let current_exe =
+        std::env::current_exe().context("Failed to determine current executable path")?;
     let mut cmd = std::process::Command::new(current_exe);
     cmd.arg("run").arg("--config").arg(config);
 
@@ -36,7 +37,9 @@ pub async fn start_command(
 
     cmd.stdin(std::process::Stdio::null());
 
-    let child = cmd.spawn().context("Failed to spawn background Raddy process")?;
+    let child = cmd
+        .spawn()
+        .context("Failed to spawn background Raddy process")?;
     let pid = child.id();
 
     // Poll the Admin API to verify readiness
@@ -58,7 +61,10 @@ pub async fn start_command(
     if ready {
         println!("Successfully started Raddy in the background (PID {})", pid);
     } else {
-        println!("Raddy background process started with PID {}, but Admin API did not respond within 4s", pid);
+        println!(
+            "Raddy background process started with PID {}, but Admin API did not respond within 4s",
+            pid
+        );
     }
 
     Ok(())

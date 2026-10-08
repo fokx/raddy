@@ -2,7 +2,7 @@
 // Ported to Rust for Raddy
 
 use super::lexer::{
-    is_close_curly_brace, is_next_on_new_line, is_open_curly_brace, tokenize, Token,
+    Token, is_close_curly_brace, is_next_on_new_line, is_open_curly_brace, tokenize,
 };
 use std::error::Error;
 use std::fmt;
@@ -21,10 +21,7 @@ impl DispenserError {
         }
     }
 
-    pub fn with_source(
-        message: String,
-        source: Box<dyn Error + Send + Sync + 'static>,
-    ) -> Self {
+    pub fn with_source(message: String, source: Box<dyn Error + Send + Sync + 'static>) -> Self {
         Self {
             message,
             source: Some(source),

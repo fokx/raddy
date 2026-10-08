@@ -61,7 +61,9 @@ impl AdminServer {
             }
         };
 
-        let local_addr = self.local_addr.unwrap_or_else(|| listener.local_addr().unwrap());
+        let local_addr = self
+            .local_addr
+            .unwrap_or_else(|| listener.local_addr().unwrap());
         tracing::info!("Admin API running on http://{}", local_addr);
 
         let app = build_admin_router(self.state.clone());

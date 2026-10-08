@@ -1,9 +1,9 @@
-use std::collections::{HashMap, HashSet};
-use std::path::{Path, PathBuf};
 use crate::ast::*;
 use crate::error::{ParseError, ParseResult};
 use crate::lexer::Lexer;
 use crate::parser::Parser;
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
 
 pub struct Preprocessor {
     snippets: HashMap<String, SnippetNode>,
@@ -118,7 +118,11 @@ impl Preprocessor {
                     } else {
                         &[]
                     };
-                    let substituted = substitute_snippet_args(&snippet.directives, args, import_dir.block.as_deref());
+                    let substituted = substitute_snippet_args(
+                        &snippet.directives,
+                        args,
+                        import_dir.block.as_deref(),
+                    );
                     for d in substituted {
                         if let Some(block) = d.block {
                             caddyfile.site_blocks.push(SiteBlockNode {
@@ -150,12 +154,18 @@ impl Preprocessor {
         Ok(caddyfile)
     }
 
-    pub fn expand_directive_list(&mut self, directives: &[DirectiveNode]) -> ParseResult<Vec<DirectiveNode>> {
+    pub fn expand_directive_list(
+        &mut self,
+        directives: &[DirectiveNode],
+    ) -> ParseResult<Vec<DirectiveNode>> {
         let mut expanded = Vec::new();
 
         for dir in directives {
             if dir.name == "import" {
-                let target = dir.args.first().ok_or_else(|| ParseError::Import("Missing argument to import".into()))?;
+                let target = dir
+                    .args
+                    .first()
+                    .ok_or_else(|| ParseError::Import("Missing argument to import".into()))?;
                 let args = if dir.args.len() > 1 {
                     &dir.args[1..]
                 } else {
@@ -177,7 +187,12 @@ impl Preprocessor {
         Ok(expanded)
     }
 
-    fn resolve_import(&mut self, target: &str, args: &[String], block: Option<&[DirectiveNode]>) -> ParseResult<Vec<DirectiveNode>> {
+    fn resolve_import(
+        &mut self,
+        target: &str,
+        args: &[String],
+        block: Option<&[DirectiveNode]>,
+    ) -> ParseResult<Vec<DirectiveNode>> {
         if self.import_stack.contains(target) {
             return Err(ParseError::Import(format!(
                 "Circular import detected: '{}'",
@@ -201,8 +216,13 @@ impl Preprocessor {
                 } else {
                     let mut all_dirs = Vec::new();
                     for file_path in matched_files {
-                        let content = std::fs::read_to_string(&file_path)
-                            .map_err(|e| ParseError::Import(format!("Failed to read imported file '{}': {}", file_path.display(), e)))?;
+                        let content = std::fs::read_to_string(&file_path).map_err(|e| {
+                            ParseError::Import(format!(
+                                "Failed to read imported file '{}': {}",
+                                file_path.display(),
+                                e
+                            ))
+                        })?;
 
                         let tokens = Lexer::new(&content).tokenize()?;
                         let mut parser = Parser::new(tokens);
@@ -229,8 +249,13 @@ impl Preprocessor {
                     self.base_dir.join(target)
                 };
                 if file_path.exists() && file_path.is_file() {
-                    let content = std::fs::read_to_string(&file_path)
-                        .map_err(|e| ParseError::Import(format!("Failed to read imported file '{}': {}", file_path.display(), e)))?;
+                    let content = std::fs::read_to_string(&file_path).map_err(|e| {
+                        ParseError::Import(format!(
+                            "Failed to read imported file '{}': {}",
+                            file_path.display(),
+                            e
+                        ))
+                    })?;
 
                     let tokens = Lexer::new(&content).tokenize()?;
                     let mut parser = Parser::new(tokens);
@@ -270,8 +295,9 @@ fn resolve_glob_files(base_dir: &Path, target: &str) -> ParseResult<Vec<PathBuf>
     };
 
     let pattern_str = full_path.to_string_lossy();
-    let paths = glob::glob(&pattern_str)
-        .map_err(|e| ParseError::Import(format!("Invalid import glob pattern '{}': {}", target, e)))?;
+    let paths = glob::glob(&pattern_str).map_err(|e| {
+        ParseError::Import(format!("Invalid import glob pattern '{}': {}", target, e))
+    })?;
 
     let mut matches = Vec::new();
     for entry in paths {
@@ -283,7 +309,12 @@ fn resolve_glob_files(base_dir: &Path, target: &str) -> ParseResult<Vec<PathBuf>
                     }
                 }
             }
-            Err(e) => return Err(ParseError::Import(format!("Failed to match import glob: {}", e))),
+            Err(e) => {
+                return Err(ParseError::Import(format!(
+                    "Failed to match import glob: {}",
+                    e
+                )));
+            }
         }
     }
     matches.sort();

@@ -12,7 +12,11 @@ fn test_server_name_matcher() {
         (vec!["foo", "example.com"], "foo.com", false),
         (vec!["*.example.com"], "example.com", false),
         (vec!["*.example.com"], "sub.example.com", true),
-        (vec!["*.example.com", "*.sub.example.com"], "sub2.sub.example.com", true),
+        (
+            vec!["*.example.com", "*.sub.example.com"],
+            "sub2.sub.example.com",
+            true,
+        ),
     ];
 
     for (i, (names, input, expect)) in cases.into_iter().enumerate() {
@@ -54,12 +58,32 @@ fn test_remote_ip_matcher() {
         (vec!["127.0.0.1"], vec![], "127.0.0.1:12345", true),
         (vec!["127.0.0.1"], vec![], "127.0.0.2:12345", false),
         (vec!["127.0.0.1/16"], vec![], "127.0.1.23:12345", true),
-        (vec!["127.0.0.1", "192.168.1.105"], vec![], "192.168.1.105:12345", true),
+        (
+            vec!["127.0.0.1", "192.168.1.105"],
+            vec![],
+            "192.168.1.105:12345",
+            true,
+        ),
         (vec![], vec!["127.0.0.1"], "127.0.0.1:12345", false),
         (vec![], vec!["127.0.0.2"], "127.0.0.1:12345", true),
-        (vec!["127.0.0.1"], vec!["127.0.0.2"], "127.0.0.1:12345", true),
-        (vec!["127.0.0.2"], vec!["127.0.0.2"], "127.0.0.2:12345", false),
-        (vec!["127.0.0.2"], vec!["127.0.0.2"], "127.0.0.3:12345", false),
+        (
+            vec!["127.0.0.1"],
+            vec!["127.0.0.2"],
+            "127.0.0.1:12345",
+            true,
+        ),
+        (
+            vec!["127.0.0.2"],
+            vec!["127.0.0.2"],
+            "127.0.0.2:12345",
+            false,
+        ),
+        (
+            vec!["127.0.0.2"],
+            vec!["127.0.0.2"],
+            "127.0.0.3:12345",
+            false,
+        ),
     ];
 
     for (i, (ranges, not_ranges, input, expect)) in cases.into_iter().enumerate() {

@@ -177,7 +177,12 @@ impl Replacer {
         self.replace_internal(input, empty_val, false)
     }
 
-    fn replace_internal(&self, input: &str, empty_val: &str, treat_unknown_as_empty: bool) -> String {
+    fn replace_internal(
+        &self,
+        input: &str,
+        empty_val: &str,
+        treat_unknown_as_empty: bool,
+    ) -> String {
         let bytes = input.as_bytes();
         let len = bytes.len();
         if !bytes.contains(&b'{') && !bytes.contains(&b'}') {
@@ -337,7 +342,9 @@ mod tests {
 
     #[test]
     fn test_env_placeholder() {
-        unsafe { std::env::set_var("RADDY_TEST_VAR", "caddy_rocks"); }
+        unsafe {
+            std::env::set_var("RADDY_TEST_VAR", "caddy_rocks");
+        }
         let map = MapPlaceholderProvider::new();
         let out = eval_placeholders("val: {env.RADDY_TEST_VAR}", &map);
         assert_eq!(out, "val: caddy_rocks");

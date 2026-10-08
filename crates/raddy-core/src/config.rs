@@ -360,16 +360,19 @@ pub const ZEROSSL_PRODUCTION: &str = "https://acme.zerossl.com/v2/DV90";
 pub fn resolve_acme_ca(ca_or_alias: &str) -> String {
     let lower = ca_or_alias.trim().to_lowercase();
     match lower.as_str() {
-        "staging" | "dev" | "letsencrypt_staging" | "letsencrypt-staging" | "le_staging" | "le-staging" => {
-            LETS_ENCRYPT_STAGING.to_string()
-        }
-        "production" | "prod" | "letsencrypt" | "letsencrypt_production" | "letsencrypt-production" | "le" => {
-            LETS_ENCRYPT_PRODUCTION.to_string()
-        }
-        "zerossl" | "zerossl_production" | "zerossl-production" => {
-            ZEROSSL_PRODUCTION.to_string()
-        }
+        "staging"
+        | "dev"
+        | "letsencrypt_staging"
+        | "letsencrypt-staging"
+        | "le_staging"
+        | "le-staging" => LETS_ENCRYPT_STAGING.to_string(),
+        "production"
+        | "prod"
+        | "letsencrypt"
+        | "letsencrypt_production"
+        | "letsencrypt-production"
+        | "le" => LETS_ENCRYPT_PRODUCTION.to_string(),
+        "zerossl" | "zerossl_production" | "zerossl-production" => ZEROSSL_PRODUCTION.to_string(),
         _ => ca_or_alias.trim().to_string(),
     }
 }
-

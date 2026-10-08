@@ -1,13 +1,13 @@
-use std::io::Write;
 use async_trait::async_trait;
 use bytes::Bytes;
-use flate2::write::{DeflateEncoder, GzEncoder};
 use flate2::Compression;
-use http::header::{ACCEPT_ENCODING, CONTENT_ENCODING, CONTENT_LENGTH};
+use flate2::write::{DeflateEncoder, GzEncoder};
 use http::HeaderValue;
+use http::header::{ACCEPT_ENCODING, CONTENT_ENCODING, CONTENT_LENGTH};
 use raddy_core::context::Context;
 use raddy_core::error::Result;
 use raddy_core::handler::Handler;
+use std::io::Write;
 
 /// Supported compression algorithms.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -90,30 +90,24 @@ impl Handler for EncodeHandler {
         }
 
         let compressed_body = match chosen_format {
-            Some(CompressionFormat::Zstd) => {
-                match zstd::encode_all(&body[..], 3) {
-                    Ok(compressed) => {
-                        ctx.response_headers.insert(
-                            CONTENT_ENCODING,
-                            HeaderValue::from_static("zstd"),
-                        );
-                        Bytes::from(compressed)
-                    }
-                    Err(e) => {
-                        tracing::warn!("Zstd compression failed: {}", e);
-                        body
-                    }
+            Some(CompressionFormat::Zstd) => match zstd::encode_all(&body[..], 3) {
+                Ok(compressed) => {
+                    ctx.response_headers
+                        .insert(CONTENT_ENCODING, HeaderValue::from_static("zstd"));
+                    Bytes::from(compressed)
                 }
-            }
+                Err(e) => {
+                    tracing::warn!("Zstd compression failed: {}", e);
+                    body
+                }
+            },
             Some(CompressionFormat::Gzip) => {
                 let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
                 if encoder.write_all(&body).is_ok() && encoder.flush().is_ok() {
                     match encoder.finish() {
                         Ok(compressed) => {
-                            ctx.response_headers.insert(
-                                CONTENT_ENCODING,
-                                HeaderValue::from_static("gzip"),
-                            );
+                            ctx.response_headers
+                                .insert(CONTENT_ENCODING, HeaderValue::from_static("gzip"));
                             Bytes::from(compressed)
                         }
                         Err(_) => body,
@@ -127,10 +121,8 @@ impl Handler for EncodeHandler {
                 if encoder.write_all(&body).is_ok() && encoder.flush().is_ok() {
                     match encoder.finish() {
                         Ok(compressed) => {
-                            ctx.response_headers.insert(
-                                CONTENT_ENCODING,
-                                HeaderValue::from_static("deflate"),
-                            );
+                            ctx.response_headers
+                                .insert(CONTENT_ENCODING, HeaderValue::from_static("deflate"));
                             Bytes::from(compressed)
                         }
                         Err(_) => body,
@@ -154,4 +146,3 @@ impl Handler for EncodeHandler {
         true
     }
 }
-

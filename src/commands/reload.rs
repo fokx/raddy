@@ -1,5 +1,5 @@
+use anyhow::{Context, Result, bail};
 use std::path::Path;
-use anyhow::{bail, Context, Result};
 
 /// Executes `raddy reload` via Admin API.
 pub async fn reload_command(

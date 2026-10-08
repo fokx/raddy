@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-use std::time::Duration;
 use async_trait::async_trait;
 use bytes::Bytes;
 use http::{HeaderMap, HeaderValue, Method, StatusCode};
@@ -9,14 +7,17 @@ use raddy_core::context::Context;
 use raddy_core::error::{CoreError, Result as CoreResult};
 use raddy_core::handler::Handler;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::time::Duration;
 
-use super::acl::{default_acl_suffix_rules, new_acl_rule, AclRule, AclRuleConfig};
+use super::acl::{AclRule, AclRuleConfig, default_acl_suffix_rules, new_acl_rule};
 use super::auth::{AuthConfig, AuthError};
-use super::upstream::{dial_target, UpstreamProxy};
+use super::upstream::{UpstreamProxy, dial_target};
 
 const HIDDEN_PAGE: &str = "<html>\n<head>\n  <title>Hidden Proxy Page</title>\n</head>\n<body>\n<h1>Hidden Proxy Page!</h1>\n{}<br/>\n</body>\n</html>";
 const AUTH_FAIL: &str = "Please authenticate yourself to the proxy.";
-const AUTH_OK: &str = "Congratulations, you are successfully authenticated to the proxy! Go browse all the things!";
+const AUTH_OK: &str =
+    "Congratulations, you are successfully authenticated to the proxy! Go browse all the things!";
 
 const PAC_TEMPLATE: &str = "\nfunction FindProxyForURL(url, host) {\n\tif (host === \"127.0.0.1\" || host === \"::1\" || host === \"localhost\")\n\t\treturn \"DIRECT\";\n\treturn \"HTTPS {}\";\n}\n";
 
@@ -65,13 +66,22 @@ pub struct ForwardProxyHandler {
 
 impl ForwardProxyHandler {
     pub fn from_config(details: &HashMap<String, serde_json::Value>) -> CoreResult<Self> {
-        let pac_path = details
-            .get("pac_path")
-            .and_then(|v| v.as_str())
-            .map(|s| if s.starts_with('/') { s.to_string() } else { format!("/{}", s) });
+        let pac_path = details.get("pac_path").and_then(|v| v.as_str()).map(|s| {
+            if s.starts_with('/') {
+                s.to_string()
+            } else {
+                format!("/{}", s)
+            }
+        });
 
-        let hide_ip = details.get("hide_ip").and_then(|v| v.as_bool()).unwrap_or(false);
-        let hide_via = details.get("hide_via").and_then(|v| v.as_bool()).unwrap_or(false);
+        let hide_ip = details
+            .get("hide_ip")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let hide_via = details
+            .get("hide_via")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
         let disable_insecure_upstreams_check = details
             .get("disable_insecure_upstreams_check")
             .and_then(|v| v.as_bool())
@@ -80,7 +90,11 @@ impl ForwardProxyHandler {
         let hosts = details
             .get("hosts")
             .and_then(|v| v.as_array())
-            .map(|arr| arr.iter().filter_map(|x| x.as_str().map(|s| s.to_string())).collect())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|x| x.as_str().map(|s| s.to_string()))
+                    .collect()
+            })
             .unwrap_or_default();
 
         let mut has_probe_resistance = false;
@@ -116,9 +130,11 @@ impl ForwardProxyHandler {
             .unwrap_or(2);
 
         let upstream = if let Some(u_str) = details.get("upstream").and_then(|v| v.as_str()) {
-            Some(UpstreamProxy::parse(u_str, disable_insecure_upstreams_check).map_err(|e| {
-                CoreError::Config(format!("Failed to parse upstream proxy URL: {}", e))
-            })?)
+            Some(
+                UpstreamProxy::parse(u_str, disable_insecure_upstreams_check).map_err(|e| {
+                    CoreError::Config(format!("Failed to parse upstream proxy URL: {}", e))
+                })?,
+            )
         } else {
             None
         };
@@ -146,7 +162,9 @@ impl ForwardProxyHandler {
         }
 
         if has_probe_resistance && auth.is_none() {
-            return Err(CoreError::Config("probe resistance requires authentication".into()));
+            return Err(CoreError::Config(
+                "probe resistance requires authentication".into(),
+            ));
         }
 
         let mut acl_rules = Vec::new();
@@ -157,7 +175,10 @@ impl ForwardProxyHandler {
                     for subj in subjects {
                         if let Some(s) = subj.as_str() {
                             let rule = new_acl_rule(s, allow).map_err(|e| {
-                                CoreError::Config(format!("Invalid ACL rule subject '{}': {}", s, e))
+                                CoreError::Config(format!(
+                                    "Invalid ACL rule subject '{}': {}",
+                                    s, e
+                                ))
                             })?;
                             acl_rules.push(rule);
                         }
@@ -285,8 +306,8 @@ impl Handler for ForwardProxyHandler {
         }
 
         // 4. Origin host request check (pass through non-proxy requests destined for site itself)
-        let is_matching_host = !self.hosts.is_empty()
-            && self.hosts.iter().any(|h| h.eq_ignore_ascii_case(&req_host));
+        let is_matching_host =
+            !self.hosts.is_empty() && self.hosts.iter().any(|h| h.eq_ignore_ascii_case(&req_host));
 
         let is_origin_request = is_matching_host
             || (self.hosts.is_empty()
@@ -316,7 +337,11 @@ impl Handler for ForwardProxyHandler {
         if ctx.method == Method::CONNECT {
             let host_port_str = if let Some(auth) = ctx.uri.authority() {
                 auth.as_str().to_string()
-            } else if let Some(h) = ctx.headers.get(http::header::HOST).and_then(|v| v.to_str().ok()) {
+            } else if let Some(h) = ctx
+                .headers
+                .get(http::header::HOST)
+                .and_then(|v| v.to_str().ok())
+            {
                 h.to_string()
             } else {
                 ctx.uri.to_string()
@@ -347,7 +372,10 @@ impl Handler for ForwardProxyHandler {
                     if err_str.contains("not allowed") || err_str.contains("disallowed") {
                         ctx.set_response(StatusCode::FORBIDDEN, format!("403 Forbidden: {}\n", e));
                     } else {
-                        ctx.set_response(StatusCode::BAD_GATEWAY, format!("502 Bad Gateway: {}\n", e));
+                        ctx.set_response(
+                            StatusCode::BAD_GATEWAY,
+                            format!("502 Bad Gateway: {}\n", e),
+                        );
                     }
                     return Ok(());
                 }
@@ -365,7 +393,9 @@ impl Handler for ForwardProxyHandler {
                     match upgrade.await {
                         Ok(upgraded) => {
                             let mut client_io = TokioIo::new(upgraded);
-                            let _ = tokio::io::copy_bidirectional(&mut client_io, &mut target_stream).await;
+                            let _ =
+                                tokio::io::copy_bidirectional(&mut client_io, &mut target_stream)
+                                    .await;
                         }
                         Err(e) => {
                             tracing::debug!("CONNECT upgrade failed: {}", e);
@@ -462,7 +492,11 @@ impl Handler for ForwardProxyHandler {
         });
 
         // Determine path and query to send
-        let uri_path = ctx.uri.path_and_query().map(|pq| pq.as_str()).unwrap_or("/");
+        let uri_path = ctx
+            .uri
+            .path_and_query()
+            .map(|pq| pq.as_str())
+            .unwrap_or("/");
 
         let mut req_builder = http::Request::builder()
             .method(ctx.method.clone())
@@ -555,7 +589,9 @@ fn parse_duration(s: &str) -> Option<Duration> {
     } else if let Some(num) = s.strip_suffix('m') {
         num.parse::<u64>().ok().map(|m| Duration::from_secs(m * 60))
     } else if let Some(num) = s.strip_suffix('h') {
-        num.parse::<u64>().ok().map(|h| Duration::from_secs(h * 3600))
+        num.parse::<u64>()
+            .ok()
+            .map(|h| Duration::from_secs(h * 3600))
     } else {
         s.parse::<u64>().ok().map(Duration::from_secs)
     }

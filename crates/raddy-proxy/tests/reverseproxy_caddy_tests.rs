@@ -1,9 +1,9 @@
-use std::sync::Arc;
 use http::{HeaderMap, HeaderValue, Method, Uri};
 use raddy_core::Context;
 use raddy_proxy::{
-    strip_hop_by_hop_headers, LeastConn, LoadBalancer, RoundRobin, Upstream, WeightedRoundRobin,
+    LeastConn, LoadBalancer, RoundRobin, Upstream, WeightedRoundRobin, strip_hop_by_hop_headers,
 };
+use std::sync::Arc;
 
 fn dummy_ctx() -> Context {
     Context::new(
@@ -94,12 +94,21 @@ fn test_hop_by_hop_101_strips_headers_preserves_upgrade() {
     headers.insert("connection", HeaderValue::from_static("Upgrade"));
     headers.insert("alt-svc", HeaderValue::from_static("h2=\"evil.com:443\""));
     headers.insert("keep-alive", HeaderValue::from_static("timeout=999"));
-    headers.insert("proxy-authenticate", HeaderValue::from_static("Basic realm=\"phish\""));
+    headers.insert(
+        "proxy-authenticate",
+        HeaderValue::from_static("Basic realm=\"phish\""),
+    );
 
     strip_hop_by_hop_headers(&mut headers, true);
 
-    assert_eq!(headers.get("upgrade"), Some(&HeaderValue::from_static("websocket")));
-    assert_eq!(headers.get("connection"), Some(&HeaderValue::from_static("Upgrade")));
+    assert_eq!(
+        headers.get("upgrade"),
+        Some(&HeaderValue::from_static("websocket"))
+    );
+    assert_eq!(
+        headers.get("connection"),
+        Some(&HeaderValue::from_static("Upgrade"))
+    );
     assert_eq!(headers.get("alt-svc"), None);
     assert_eq!(headers.get("keep-alive"), None);
     assert_eq!(headers.get("proxy-authenticate"), None);
@@ -109,13 +118,25 @@ fn test_hop_by_hop_101_strips_headers_preserves_upgrade() {
 fn test_hop_by_hop_101_strips_connection_named_headers() {
     let mut headers = HeaderMap::new();
     headers.insert("upgrade", HeaderValue::from_static("websocket"));
-    headers.insert("connection", HeaderValue::from_static("Upgrade, X-Custom-ID"));
-    headers.insert("x-custom-id", HeaderValue::from_static("should-be-stripped"));
+    headers.insert(
+        "connection",
+        HeaderValue::from_static("Upgrade, X-Custom-ID"),
+    );
+    headers.insert(
+        "x-custom-id",
+        HeaderValue::from_static("should-be-stripped"),
+    );
 
     strip_hop_by_hop_headers(&mut headers, true);
 
-    assert_eq!(headers.get("upgrade"), Some(&HeaderValue::from_static("websocket")));
-    assert_eq!(headers.get("connection"), Some(&HeaderValue::from_static("Upgrade")));
+    assert_eq!(
+        headers.get("upgrade"),
+        Some(&HeaderValue::from_static("websocket"))
+    );
+    assert_eq!(
+        headers.get("connection"),
+        Some(&HeaderValue::from_static("Upgrade"))
+    );
     assert_eq!(headers.get("x-custom-id"), None);
 }
 
@@ -130,7 +151,10 @@ fn test_hop_by_hop_200_strips_all() {
 
     strip_hop_by_hop_headers(&mut headers, false);
 
-    assert_eq!(headers.get("content-type"), Some(&HeaderValue::from_static("text/plain")));
+    assert_eq!(
+        headers.get("content-type"),
+        Some(&HeaderValue::from_static("text/plain"))
+    );
     assert_eq!(headers.get("upgrade"), None);
     assert_eq!(headers.get("connection"), None);
     assert_eq!(headers.get("alt-svc"), None);

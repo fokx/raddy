@@ -1,6 +1,6 @@
-use std::path::PathBuf;
 use clap::{Parser, Subcommand};
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
+use std::path::PathBuf;
+use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
 pub mod commands;
 
@@ -249,8 +249,12 @@ pub enum Commands {
 
 pub async fn run_cli() -> anyhow::Result<()> {
     let is_debug = std::env::args().any(|arg| arg == "--debug" || arg == "-d")
-        || std::env::var("RADDY_DEBUG").map(|v| v == "1" || v == "true").unwrap_or(false)
-        || std::env::var("DEBUG").map(|v| v == "1" || v == "true").unwrap_or(false);
+        || std::env::var("RADDY_DEBUG")
+            .map(|v| v == "1" || v == "true")
+            .unwrap_or(false)
+        || std::env::var("DEBUG")
+            .map(|v| v == "1" || v == "true")
+            .unwrap_or(false);
 
     let default_filter = if is_debug {
         "debug,raddy=debug,raddy_tls=debug,raddy_http=debug,raddy_admin=debug,raddy_caddyfile=debug"
@@ -333,12 +337,7 @@ pub async fn run_cli() -> anyhow::Result<()> {
             pretty,
             validate,
         } => {
-            commands::config_ops::adapt_command(
-                &config,
-                adapter.as_deref(),
-                pretty,
-                validate,
-            )?;
+            commands::config_ops::adapt_command(&config, adapter.as_deref(), pretty, validate)?;
         }
 
         Commands::Fmt { config, overwrite } => {

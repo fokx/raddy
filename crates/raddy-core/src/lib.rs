@@ -13,20 +13,21 @@ pub mod placeholder;
 pub mod state;
 
 pub use config::{
-    resolve_acme_ca, Config, HandlerConfig, HttpApp, HttpServer, MatcherSet, Route,
-    LETS_ENCRYPT_PRODUCTION, LETS_ENCRYPT_STAGING, ZEROSSL_PRODUCTION,
+    Config, HandlerConfig, HttpApp, HttpServer, LETS_ENCRYPT_PRODUCTION, LETS_ENCRYPT_STAGING,
+    MatcherSet, Route, ZEROSSL_PRODUCTION, resolve_acme_ca,
 };
 pub use context::Context;
 pub use error::{CoreError, Result};
 pub use handler::{Handler, HandlerChain};
 pub use matcher::{
-    CompiledMatcherSet, HeaderMatcher, HeaderRegexpMatcher, HostMatcher, Matcher, MethodMatcher,
-    NotMatcher, PathMatcher, PathRegexpMatcher, QueryMatcher, RemoteIpMatcher,
+    CompiledMatcherSet, ExpressionMatcher, HeaderMatcher, HeaderRegexpMatcher, HostMatcher,
+    Matcher, MethodMatcher, NotMatcher, PathMatcher, PathRegexpMatcher, QueryMatcher,
+    RemoteIpMatcher,
 };
 pub use module::{ModuleRegistration, ModuleRegistry};
 pub use network::{
-    join_network_address, parse_network_address, parse_network_address_with_defaults,
-    split_network_address, NetworkAddress,
+    NetworkAddress, join_network_address, parse_network_address,
+    parse_network_address_with_defaults, split_network_address,
 };
-pub use placeholder::{eval_placeholders, PlaceholderProvider, Replacer};
+pub use placeholder::{PlaceholderProvider, Replacer, eval_placeholders};
 pub use state::AppState;

@@ -84,7 +84,10 @@ impl Parser {
                     return Err(ParseError::Syntax {
                         line: first_tok.span.line,
                         col: first_tok.span.col,
-                        message: format!("request matchers may not be defined globally, they must be in a site block; found {}, at Caddyfile:{}", text, first_tok.span.line),
+                        message: format!(
+                            "request matchers may not be defined globally, they must be in a site block; found {}, at Caddyfile:{}",
+                            text, first_tok.span.line
+                        ),
                     });
                 }
 
@@ -104,11 +107,14 @@ impl Parser {
                     self.skip_newlines();
 
                     let directives = self.expect_block()?;
-                    caddyfile.snippets.insert(name.clone(), SnippetNode {
-                        name,
-                        directives,
-                        span,
-                    });
+                    caddyfile.snippets.insert(
+                        name.clone(),
+                        SnippetNode {
+                            name,
+                            directives,
+                            span,
+                        },
+                    );
                     self.skip_newlines();
                     continue;
                 }
@@ -128,11 +134,14 @@ impl Parser {
                     self.skip_newlines();
 
                     let directives = self.expect_block()?;
-                    caddyfile.named_routes.insert(name.clone(), NamedRouteNode {
-                        name,
-                        directives,
-                        span,
-                    });
+                    caddyfile.named_routes.insert(
+                        name.clone(),
+                        NamedRouteNode {
+                            name,
+                            directives,
+                            span,
+                        },
+                    );
                     self.skip_newlines();
                     continue;
                 }
@@ -169,15 +178,34 @@ impl Parser {
                         // Braceless site block: directives continue until EOF
                         if addresses.len() == 1 {
                             let known = [
-                                "handle", "handle_path", "handle_response", "route", "respond",
-                                "reverse_proxy", "redir", "file_server", "header", "encode",
-                                "tls", "root", "log", "log_name", "log_skip", "log_append", "try_files", "rewrite", "invoke"
+                                "handle",
+                                "handle_path",
+                                "handle_response",
+                                "route",
+                                "respond",
+                                "reverse_proxy",
+                                "redir",
+                                "file_server",
+                                "header",
+                                "encode",
+                                "tls",
+                                "root",
+                                "log",
+                                "log_name",
+                                "log_skip",
+                                "log_append",
+                                "try_files",
+                                "rewrite",
+                                "invoke",
                             ];
                             if known.contains(&addresses[0].as_str()) {
                                 return Err(ParseError::Syntax {
                                     line: span.line,
                                     col: span.col,
-                                    message: format!("Caddyfile:{}: parsed '{}' as a site address, but it is a known directive; directives must appear in a site block", span.line, addresses[0]),
+                                    message: format!(
+                                        "Caddyfile:{}: parsed '{}' as a site address, but it is a known directive; directives must appear in a site block",
+                                        span.line, addresses[0]
+                                    ),
                                 });
                             }
                         }
@@ -199,10 +227,13 @@ impl Parser {
                     // Check if next token on same line is a directive for single-line site block
                     // Single-line example: `localhost:8080 respond "hello" 200`
                     // In this case, we have 1 address, and the next token is NOT a comma or block open
-                    if !addresses.is_empty() && self.peek().map(|t| &t.kind) != Some(&TokenKind::BlockOpen) {
+                    if !addresses.is_empty()
+                        && self.peek().map(|t| &t.kind) != Some(&TokenKind::BlockOpen)
+                    {
                         // If next token is on the same line and is a known directive or not an address with comma:
                         if let Some(next) = self.peek() {
-                            if next.kind != TokenKind::Newline && next.kind != TokenKind::BlockOpen {
+                            if next.kind != TokenKind::Newline && next.kind != TokenKind::BlockOpen
+                            {
                                 // If the previous addr token didn't end with comma, it might be single-line directive!
                                 if !addr.ends_with(',') {
                                     let directive = self.parse_directive_line()?;
@@ -224,7 +255,9 @@ impl Parser {
                     });
                 }
                 TokenKind::Eof => {
-                    return Err(ParseError::UnexpectedEof("Unexpected EOF in site address".into()));
+                    return Err(ParseError::UnexpectedEof(
+                        "Unexpected EOF in site address".into(),
+                    ));
                 }
             }
         }
@@ -260,18 +293,25 @@ impl Parser {
                 col: t.span.col,
                 message: format!("Expected '{{', found {:?}", t.kind),
             }),
-            None => Err(ParseError::UnexpectedEof("Expected '{', reached EOF".into())),
+            None => Err(ParseError::UnexpectedEof(
+                "Expected '{', reached EOF".into(),
+            )),
         }
     }
 
-    fn parse_directive_list(&mut self, stop_at_block_close: bool) -> ParseResult<Vec<DirectiveNode>> {
+    fn parse_directive_list(
+        &mut self,
+        stop_at_block_close: bool,
+    ) -> ParseResult<Vec<DirectiveNode>> {
         let mut directives = Vec::new();
         self.skip_newlines();
 
         while let Some(tok) = self.peek() {
             if tok.kind == TokenKind::Eof {
                 if stop_at_block_close {
-                    return Err(ParseError::UnexpectedEof("Unclosed block, expected '}'".into()));
+                    return Err(ParseError::UnexpectedEof(
+                        "Unclosed block, expected '}'".into(),
+                    ));
                 }
                 break;
             }
@@ -353,7 +393,11 @@ impl Parser {
                     && name != "email"
                     && name != "auto_https"
                     && name != "log";
-                if can_have_matcher && matcher.is_none() && args.is_empty() && (val_str.starts_with('@') || val_str.starts_with('/') || val_str == "*") {
+                if can_have_matcher
+                    && matcher.is_none()
+                    && args.is_empty()
+                    && (val_str.starts_with('@') || val_str.starts_with('/') || val_str == "*")
+                {
                     matcher = Some(val_str);
                 } else {
                     args.push(val_str);

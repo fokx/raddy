@@ -17,10 +17,10 @@ pub use acme::{
 };
 pub use error::{Result, TlsError};
 pub use local_ca::LocalCa;
-pub use manager::{is_local_or_private, TlsManager};
+pub use manager::{TlsManager, is_local_or_private};
 pub use matchers::{RemoteIpMatcher, ServerNameMatcher, ServerNameREMatcher};
 pub use sni::SniResolver;
-pub use storage::{parse_certified_key, CertStorage, FileCertStorage};
+pub use storage::{CertStorage, FileCertStorage, parse_certified_key};
 
 /// Installs the default process-level CryptoProvider (AWS-LC-RS) for Rustls.
 pub fn install_default_crypto_provider() {

@@ -80,21 +80,26 @@ async fn probe_url(url: &str, timeout: Duration, expected_status: u16) -> bool {
 }
 
 async fn send_simple_get(url: &str) -> Result<u16, ()> {
-    use http_body_util::Empty;
     use bytes::Bytes;
+    use http_body_util::Empty;
     use hyper_util::rt::TokioIo;
     use tokio::net::TcpStream;
 
     let parsed_url: http::Uri = url.parse().map_err(|_| ())?;
     let host = parsed_url.host().ok_or(())?;
     let port = parsed_url.port_u16().unwrap_or(80);
-    let path = parsed_url.path_and_query().map(|pq| pq.as_str()).unwrap_or("/");
+    let path = parsed_url
+        .path_and_query()
+        .map(|pq| pq.as_str())
+        .unwrap_or("/");
 
     let addr = format!("{}:{}", host, port);
     let stream = TcpStream::connect(&addr).await.map_err(|_| ())?;
     let io = TokioIo::new(stream);
 
-    let (mut sender, conn) = hyper::client::conn::http1::handshake(io).await.map_err(|_| ())?;
+    let (mut sender, conn) = hyper::client::conn::http1::handshake(io)
+        .await
+        .map_err(|_| ())?;
     tokio::spawn(async move {
         let _ = conn.await;
     });
