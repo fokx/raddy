@@ -64,6 +64,9 @@ pub struct Adapter {
     email: Option<String>,
     acme_ca: Option<String>,
     staging: Option<bool>,
+    challenges: Option<Vec<String>>,
+    disable_http_challenge: Option<bool>,
+    disable_tls_alpn_challenge: Option<bool>,
     log_credentials: Option<bool>,
     custom_order: HashMap<String, usize>,
     site_log_counter: usize,
@@ -109,6 +112,9 @@ impl Adapter {
             email: None,
             acme_ca: None,
             staging: None,
+            challenges: None,
+            disable_http_challenge: None,
+            disable_tls_alpn_challenge: None,
             log_credentials: None,
             custom_order,
             site_log_counter: 0,
@@ -155,11 +161,20 @@ impl Adapter {
             message: format!("Failed to serialize HTTP app: {}", e),
         })?;
 
-        if self.email.is_some() || self.acme_ca.is_some() || self.staging.is_some() {
+        if self.email.is_some()
+            || self.acme_ca.is_some()
+            || self.staging.is_some()
+            || self.challenges.is_some()
+            || self.disable_http_challenge.is_some()
+            || self.disable_tls_alpn_challenge.is_some()
+        {
             let tls_app = TlsApp {
                 email: self.email.clone(),
                 acme_ca: self.acme_ca.clone(),
                 staging: self.staging,
+                challenges: self.challenges.clone(),
+                disable_http_challenge: self.disable_http_challenge,
+                disable_tls_alpn_challenge: self.disable_tls_alpn_challenge,
                 extra: HashMap::new(),
             };
             let _ = config.set_tls_app(tls_app);
@@ -245,6 +260,15 @@ impl Adapter {
                 "acme_staging" | "acme_dev" => {
                     self.acme_ca = Some(raddy_core::config::LETS_ENCRYPT_STAGING.to_string());
                     self.staging = Some(true);
+                }
+                "challenges" => {
+                    self.challenges = Some(opt.args.clone());
+                }
+                "disable_http_challenge" | "disable_http" => {
+                    self.disable_http_challenge = Some(true);
+                }
+                "disable_tls_alpn_challenge" | "disable_tls_alpn" => {
+                    self.disable_tls_alpn_challenge = Some(true);
                 }
                 "local_certs" => {
                     self.staging = Some(false);
@@ -373,6 +397,14 @@ impl Adapter {
                                 if self.email.is_none() {
                                     self.email = Some(em.to_string());
                                 }
+                            } else if let Some(chs) = t.strip_prefix("challenges:") {
+                                if self.challenges.is_none() {
+                                    self.challenges = Some(chs.split(',').map(|s| s.to_string()).collect());
+                                }
+                            } else if t == "disable_http_challenge" {
+                                self.disable_http_challenge = Some(true);
+                            } else if t == "disable_tls_alpn_challenge" {
+                                self.disable_tls_alpn_challenge = Some(true);
                             }
                         }
                     }
@@ -2017,6 +2049,53 @@ fn parse_tls_directive(dir: &DirectiveNode) -> ParseResult<TlsConnectionPolicy> 
                 }
                 "curves" => {
                     policy.curves = Some(sub.args.clone());
+                }
+                "challenges" => {
+                    let tags = policy.certificate_selection.get_or_insert_with(CertificateSelection::default);
+                    let any_tag = tags.any_tag.get_or_insert_with(Vec::new);
+                    any_tag.push(format!("challenges:{}", sub.args.join(",")));
+                }
+                "disable_http_challenge" | "disable_http" => {
+                    let tags = policy.certificate_selection.get_or_insert_with(CertificateSelection::default);
+                    let any_tag = tags.any_tag.get_or_insert_with(Vec::new);
+                    any_tag.push("disable_http_challenge".to_string());
+                }
+                "disable_tls_alpn_challenge" | "disable_tls_alpn" => {
+                    let tags = policy.certificate_selection.get_or_insert_with(CertificateSelection::default);
+                    let any_tag = tags.any_tag.get_or_insert_with(Vec::new);
+                    any_tag.push("disable_tls_alpn_challenge".to_string());
+                }
+                "issuer" => {
+                    if let Some(ref issuer_block) = sub.block {
+                        for issuer_sub in issuer_block {
+                            match issuer_sub.name.as_str() {
+                                "ca" => {
+                                    if let Some(ca_arg) = issuer_sub.args.first() {
+                                        let resolved = raddy_core::config::resolve_acme_ca(ca_arg);
+                                        let tags = policy.certificate_selection.get_or_insert_with(CertificateSelection::default);
+                                        let any_tag = tags.any_tag.get_or_insert_with(Vec::new);
+                                        any_tag.push(format!("ca:{}", resolved));
+                                    }
+                                }
+                                "challenges" => {
+                                    let tags = policy.certificate_selection.get_or_insert_with(CertificateSelection::default);
+                                    let any_tag = tags.any_tag.get_or_insert_with(Vec::new);
+                                    any_tag.push(format!("challenges:{}", issuer_sub.args.join(",")));
+                                }
+                                "disable_http_challenge" | "disable_http" => {
+                                    let tags = policy.certificate_selection.get_or_insert_with(CertificateSelection::default);
+                                    let any_tag = tags.any_tag.get_or_insert_with(Vec::new);
+                                    any_tag.push("disable_http_challenge".to_string());
+                                }
+                                "disable_tls_alpn_challenge" | "disable_tls_alpn" => {
+                                    let tags = policy.certificate_selection.get_or_insert_with(CertificateSelection::default);
+                                    let any_tag = tags.any_tag.get_or_insert_with(Vec::new);
+                                    any_tag.push("disable_tls_alpn_challenge".to_string());
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
                 }
                 _ => {}
             }

@@ -11,7 +11,10 @@ pub mod matchers;
 pub mod sni;
 pub mod storage;
 
-pub use acme::{AcmeClient, Http01ChallengeStore, LETS_ENCRYPT_PRODUCTION, LETS_ENCRYPT_STAGING};
+pub use acme::{
+    AcmeClient, ChallengeTypePreference, Http01ChallengeStore, LETS_ENCRYPT_PRODUCTION,
+    LETS_ENCRYPT_STAGING,
+};
 pub use error::{Result, TlsError};
 pub use local_ca::LocalCa;
 pub use manager::{is_local_or_private, TlsManager};

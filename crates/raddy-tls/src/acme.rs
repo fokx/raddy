@@ -41,13 +41,31 @@ impl Http01ChallengeStore {
     }
 }
 
+/// Challenge type preference for ACME certificate issuance.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ChallengeTypePreference {
+    /// Attempt TLS-ALPN-01 first directly over port 443 (RFC 8737).
+    /// If TLS-ALPN-01 fails (e.g. behind a CDN or reverse proxy terminating TLS),
+    /// automatically fall back to HTTP-01 challenge.
+    #[default]
+    TlsAlpnFirst,
+    /// Attempt HTTP-01 first over port 80. If it fails, fall back to TLS-ALPN-01.
+    Http01First,
+    /// Only use TLS-ALPN-01 challenge (e.g. when port 80 is unavailable or disable_http_challenge is set).
+    TlsAlpnOnly,
+    /// Only use HTTP-01 challenge (e.g. when disable_tls_alpn_challenge is set).
+    Http01Only,
+}
+
 /// ACME Client using `instant-acme` supporting both Domain Names and Public IP Addresses (RFC 8738).
+#[derive(Clone)]
 pub struct AcmeClient {
     directory_url: String,
     email: Option<String>,
     challenge_store: Http01ChallengeStore,
     sni_resolver: Arc<SniResolver>,
     cert_storage: Arc<dyn CertStorage>,
+    challenge_preference: ChallengeTypePreference,
 }
 
 impl AcmeClient {
@@ -64,7 +82,17 @@ impl AcmeClient {
             challenge_store,
             sni_resolver,
             cert_storage,
+            challenge_preference: ChallengeTypePreference::default(),
         }
+    }
+
+    pub fn with_challenge_preference(mut self, pref: ChallengeTypePreference) -> Self {
+        self.challenge_preference = pref;
+        self
+    }
+
+    pub fn challenge_preference(&self) -> ChallengeTypePreference {
+        self.challenge_preference
     }
 
     pub fn directory_url(&self) -> &str {
@@ -207,169 +235,302 @@ impl AcmeClient {
             }
         };
 
-        // 3. Create New Order
-        tracing::info!("Submitting ACME order for identifiers: {:?}...", identifiers_str);
-        let mut order = account
-            .new_order(&NewOrder::new(identifiers.as_slice()))
-            .await
-            .map_err(|e| TlsError::Acme(format!("Failed to create ACME order: {}", e)))?;
-        tracing::debug!("ACME order created: {}", order.url());
+        // 3. Determine ACME challenge strategy sequence
+        let methods_to_try = match self.challenge_preference {
+            ChallengeTypePreference::TlsAlpnFirst => vec![ChallengeType::TlsAlpn01, ChallengeType::Http01],
+            ChallengeTypePreference::Http01First => vec![ChallengeType::Http01, ChallengeType::TlsAlpn01],
+            ChallengeTypePreference::TlsAlpnOnly => vec![ChallengeType::TlsAlpn01],
+            ChallengeTypePreference::Http01Only => vec![ChallengeType::Http01],
+        };
 
-        // 4. Handle HTTP-01 or TLS-ALPN-01 Challenges
-        let mut active_tokens = Vec::new();
-        let mut active_alpn_ids = Vec::new();
-        let mut authorizations = order.authorizations();
+        let num_methods = methods_to_try.len();
+        let mut last_error = None;
 
-        while let Some(res) = authorizations.next().await {
-            let mut authz = res.map_err(|e| TlsError::Acme(format!("Authorization error: {}", e)))?;
-            let id_str = authz.identifier().to_string();
-
-            let has_http01 = authz.challenges.iter().any(|c| c.r#type == ChallengeType::Http01);
-            let has_tls_alpn = authz.challenges.iter().any(|c| c.r#type == ChallengeType::TlsAlpn01);
-
-            tracing::debug!(
-                "Authorization challenges offered for '{}': {:?}",
-                id_str,
-                authz.challenges.iter().map(|c| c.r#type.clone()).collect::<Vec<_>>()
+        for (attempt_idx, preferred_challenge) in methods_to_try.into_iter().enumerate() {
+            let is_last_attempt = attempt_idx + 1 == num_methods;
+            tracing::info!(
+                "Submitting ACME order for identifiers: {:?} (challenge strategy: {:?}, attempt {}/{})",
+                identifiers_str,
+                preferred_challenge,
+                attempt_idx + 1,
+                num_methods
             );
 
-            // Prefer HTTP-01 challenge if offered (standard across CDNs, proxies, and port 80).
-            // Fall back to TLS-ALPN-01 if HTTP-01 is not offered.
-            if has_http01 {
-                let mut http_challenge = authz
-                    .challenge(ChallengeType::Http01)
-                    .ok_or_else(|| TlsError::Acme("HTTP-01 challenge not found".into()))?;
+            let mut order = match account.new_order(&NewOrder::new(identifiers.as_slice())).await {
+                Ok(ord) => ord,
+                Err(e) => {
+                    let err_msg = format!("Failed to create ACME order: {}", e);
+                    tracing::error!("{}", err_msg);
+                    return Err(TlsError::Acme(err_msg));
+                }
+            };
+            tracing::debug!("ACME order created: {}", order.url());
 
-                let token = http_challenge.token.to_string();
-                let key_auth = http_challenge.key_authorization().as_str().to_string();
+            // 4. Handle TLS-ALPN-01 or HTTP-01 Challenges
+            let mut active_tokens = Vec::new();
+            let mut active_alpn_ids = Vec::new();
+            let mut authorizations = order.authorizations();
+            let mut auth_error = None;
 
-                tracing::info!(
-                    "Solving ACME challenge for '{}' using HTTP-01 (token: '{}')...",
-                    id_str,
-                    token
-                );
+            while let Some(res) = authorizations.next().await {
+                let mut authz = match res {
+                    Ok(a) => a,
+                    Err(e) => {
+                        auth_error = Some(format!("Authorization error: {}", e));
+                        break;
+                    }
+                };
 
-                self.challenge_store.insert(token.clone(), key_auth);
-                active_tokens.push(token);
+                let id_str = authz.identifier().to_string();
 
-                http_challenge
-                    .set_ready()
-                    .await
-                    .map_err(|e| TlsError::Acme(format!("Failed to set HTTP-01 challenge ready: {}", e)))?;
-            } else if has_tls_alpn {
-                let mut alpn_challenge = authz
-                    .challenge(ChallengeType::TlsAlpn01)
-                    .ok_or_else(|| TlsError::Acme("TLS-ALPN-01 challenge not found".into()))?;
-
-                let key_auth = alpn_challenge.key_authorization().as_str().to_string();
-
-                // Compute SHA-256 digest of key authorization (RFC 8737 §3)
-                let key_digest = digest(&SHA256, key_auth.as_bytes());
-
-                // Generate self-signed certificate with acmeValidation extension
-                let mut params = CertificateParams::default();
-                let mut ext = CustomExtension::new_acme_identifier(key_digest.as_ref());
-                ext.set_criticality(true);
-                params.custom_extensions.push(ext);
-
-                if let Ok(ip) = id_str.parse::<IpAddr>() {
-                    params.subject_alt_names.push(SanType::IpAddress(ip));
-                } else {
-                    let dns_name: rcgen::Ia5String = id_str.clone().try_into().map_err(|e| {
-                        TlsError::Certificate(format!("Invalid DNS name '{}' for TLS-ALPN-01: {:?}", id_str, e))
-                    })?;
-                    params.subject_alt_names.push(SanType::DnsName(dns_name));
+                if authz.status == instant_acme::AuthorizationStatus::Valid {
+                    tracing::debug!("Authorization for '{}' is already valid", id_str);
+                    continue;
                 }
 
-                let leaf_key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256)?;
-                let leaf_cert = params.self_signed(&leaf_key)?;
-                let certified_key = crate::storage::parse_certified_key(&leaf_cert.pem(), &leaf_key.serialize_pem())?;
+                let has_tls_alpn = authz.challenges.iter().any(|c| c.r#type == ChallengeType::TlsAlpn01);
+                let has_http01 = authz.challenges.iter().any(|c| c.r#type == ChallengeType::Http01);
 
-                self.sni_resolver.insert_alpn_challenge(&id_str, certified_key);
-                active_alpn_ids.push(id_str.clone());
-
-                tracing::info!("Solving ACME challenge for '{}' using TLS-ALPN-01...", id_str);
-
-                alpn_challenge
-                    .set_ready()
-                    .await
-                    .map_err(|e| TlsError::Acme(format!("Failed to set TLS-ALPN-01 challenge ready: {}", e)))?;
-            } else {
-                return Err(TlsError::Acme(format!(
-                    "Neither HTTP-01 nor TLS-ALPN-01 challenge found in authorization for '{}'. Offered: {:?}",
+                tracing::debug!(
+                    "Authorization challenges offered for '{}': {:?}",
                     id_str,
                     authz.challenges.iter().map(|c| c.r#type.clone()).collect::<Vec<_>>()
-                )));
-            }
-        }
+                );
 
-        // 5. Exponentially poll until order is ready or failed
-        tracing::debug!("Polling ACME order status until validation completes...");
-        let status = order
-            .poll_ready(&RetryPolicy::default())
-            .await
-            .map_err(|e| TlsError::Acme(format!("Failed waiting for order to become ready: {}", e)))?;
+                // Determine which challenge solver to use for this authorization
+                let chosen_type = if preferred_challenge == ChallengeType::TlsAlpn01 {
+                    if has_tls_alpn {
+                        ChallengeType::TlsAlpn01
+                    } else if has_http01 {
+                        ChallengeType::Http01
+                    } else {
+                        auth_error = Some(format!(
+                            "Neither TLS-ALPN-01 nor HTTP-01 challenge offered for '{}'",
+                            id_str
+                        ));
+                        break;
+                    }
+                } else {
+                    if has_http01 {
+                        ChallengeType::Http01
+                    } else if has_tls_alpn {
+                        ChallengeType::TlsAlpn01
+                    } else {
+                        auth_error = Some(format!(
+                            "Neither HTTP-01 nor TLS-ALPN-01 challenge offered for '{}'",
+                            id_str
+                        ));
+                        break;
+                    }
+                };
 
-        // Clean up challenge tokens and ALPN challenge certificates
-        for token in &active_tokens {
-            self.challenge_store.remove(token);
-        }
-        for id in &active_alpn_ids {
-            self.sni_resolver.remove_alpn_challenge(id);
-        }
-
-        if status != OrderStatus::Ready && status != OrderStatus::Valid {
-            // Collect detailed failure diagnostics from all authorization challenges
-            let mut failure_reasons = Vec::new();
-            let mut authzs = order.authorizations();
-            while let Some(res) = authzs.next().await {
-                if let Ok(authz) = res {
-                    let id_val = authz.identifier().to_string();
-                    for ch in &authz.challenges {
-                        if let Some(ref problem) = ch.error {
-                            let detail = problem.detail.as_deref().unwrap_or("no detail provided");
-                            let prob_type = problem.r#type.as_deref().unwrap_or("unknown");
-                            failure_reasons.push(format!(
-                                "Identifier '{}' challenge {:?}: {} (error type: {}, status: {:?})",
-                                id_val, ch.r#type, detail, prob_type, problem.status
-                            ));
+                if chosen_type == ChallengeType::TlsAlpn01 {
+                    let mut alpn_challenge = match authz.challenge(ChallengeType::TlsAlpn01) {
+                        Some(c) => c,
+                        None => {
+                            auth_error = Some(format!("TLS-ALPN-01 challenge handle missing for '{}'", id_str));
+                            break;
                         }
+                    };
+
+                    let key_auth = alpn_challenge.key_authorization().as_str().to_string();
+
+                    // Compute SHA-256 digest of key authorization (RFC 8737 §3)
+                    let key_digest = digest(&SHA256, key_auth.as_bytes());
+
+                    // Generate self-signed certificate with acmeValidation extension
+                    let mut params = CertificateParams::default();
+                    let mut ext = CustomExtension::new_acme_identifier(key_digest.as_ref());
+                    ext.set_criticality(true);
+                    params.custom_extensions.push(ext);
+
+                    params.distinguished_name = rcgen::DistinguishedName::new();
+                    params.distinguished_name.push(rcgen::DnType::CommonName, id_str.as_str());
+
+                    if let Ok(ip) = id_str.parse::<IpAddr>() {
+                        params.subject_alt_names.push(SanType::IpAddress(ip));
+                    } else {
+                        let dns_name = match rcgen::Ia5String::try_from(id_str.clone()) {
+                            Ok(n) => n,
+                            Err(e) => {
+                                auth_error = Some(format!("Invalid DNS name '{}' for TLS-ALPN-01: {:?}", id_str, e));
+                                break;
+                            }
+                        };
+                        params.subject_alt_names.push(SanType::DnsName(dns_name));
+                    }
+
+                    let leaf_key = match KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256) {
+                        Ok(k) => k,
+                        Err(e) => {
+                            auth_error = Some(format!("Failed to generate ECDSA key for TLS-ALPN-01: {}", e));
+                            break;
+                        }
+                    };
+                    let leaf_cert = match params.self_signed(&leaf_key) {
+                        Ok(c) => c,
+                        Err(e) => {
+                            auth_error = Some(format!("Failed to generate self-signed cert for TLS-ALPN-01: {}", e));
+                            break;
+                        }
+                    };
+                    let certified_key = match crate::storage::parse_certified_key(&leaf_cert.pem(), &leaf_key.serialize_pem()) {
+                        Ok(k) => k,
+                        Err(e) => {
+                            auth_error = Some(format!("Failed to parse certified key for TLS-ALPN-01: {}", e));
+                            break;
+                        }
+                    };
+
+                    self.sni_resolver.insert_alpn_challenge(&id_str, certified_key);
+                    active_alpn_ids.push(id_str.clone());
+
+                    tracing::info!("Solving ACME challenge for '{}' using TLS-ALPN-01 (direct over port 443)...", id_str);
+
+                    if let Err(e) = alpn_challenge.set_ready().await {
+                        auth_error = Some(format!("Failed to set TLS-ALPN-01 challenge ready: {}", e));
+                        break;
+                    }
+                } else {
+                    let mut http_challenge = match authz.challenge(ChallengeType::Http01) {
+                        Some(c) => c,
+                        None => {
+                            auth_error = Some(format!("HTTP-01 challenge handle missing for '{}'", id_str));
+                            break;
+                        }
+                    };
+
+                    let token = http_challenge.token.to_string();
+                    let key_auth = http_challenge.key_authorization().as_str().to_string();
+
+                    tracing::info!(
+                        "Solving ACME challenge for '{}' using HTTP-01 (token: '{}')...",
+                        id_str,
+                        token
+                    );
+
+                    self.challenge_store.insert(token.clone(), key_auth);
+                    active_tokens.push(token);
+
+                    if let Err(e) = http_challenge.set_ready().await {
+                        auth_error = Some(format!("Failed to set HTTP-01 challenge ready: {}", e));
+                        break;
                     }
                 }
             }
 
-            let detailed_msg = if failure_reasons.is_empty() {
-                format!("Unexpected ACME order status: {:?}", status)
-            } else {
-                format!(
-                    "Unexpected ACME order status: {:?}. Diagnostics: {}",
-                    status,
-                    failure_reasons.join("; ")
-                )
+            if let Some(err) = auth_error {
+                for token in &active_tokens {
+                    self.challenge_store.remove(token);
+                }
+                for id in &active_alpn_ids {
+                    self.sni_resolver.remove_alpn_challenge(id);
+                }
+
+                if !is_last_attempt {
+                    tracing::warn!("ACME authorization setup error: {}. Retrying with fallback challenge...", err);
+                    last_error = Some(err);
+                    continue;
+                } else {
+                    return Err(TlsError::Acme(err));
+                }
+            }
+
+            // 5. Exponentially poll until order is ready or failed
+            tracing::debug!("Polling ACME order status until validation completes...");
+            let poll_res = order.poll_ready(&RetryPolicy::default()).await;
+
+            // Clean up challenge tokens and ALPN challenge certificates immediately
+            for token in &active_tokens {
+                self.challenge_store.remove(token);
+            }
+            for id in &active_alpn_ids {
+                self.sni_resolver.remove_alpn_challenge(id);
+            }
+
+            let status = match poll_res {
+                Ok(st) => st,
+                Err(e) => {
+                    let msg = format!("Failed waiting for order to become ready: {}", e);
+                    if !is_last_attempt {
+                        tracing::warn!("{}. Retrying with fallback challenge strategy...", msg);
+                        last_error = Some(msg);
+                        continue;
+                    } else {
+                        return Err(TlsError::Acme(msg));
+                    }
+                }
             };
-            tracing::error!("ACME order validation failed: {}", detailed_msg);
-            return Err(TlsError::Acme(detailed_msg));
+
+            if status != OrderStatus::Ready && status != OrderStatus::Valid {
+                // Collect detailed failure diagnostics from all authorization challenges
+                let mut failure_reasons = Vec::new();
+                let mut authzs = order.authorizations();
+                while let Some(res) = authzs.next().await {
+                    if let Ok(authz) = res {
+                        let id_val = authz.identifier().to_string();
+                        for ch in &authz.challenges {
+                            if let Some(ref problem) = ch.error {
+                                let detail = problem.detail.as_deref().unwrap_or("no detail provided");
+                                let prob_type = problem.r#type.as_deref().unwrap_or("unknown");
+                                failure_reasons.push(format!(
+                                    "Identifier '{}' challenge {:?}: {} (error type: {}, status: {:?})",
+                                    id_val, ch.r#type, detail, prob_type, problem.status
+                                ));
+                            }
+                        }
+                    }
+                }
+
+                let detailed_msg = if failure_reasons.is_empty() {
+                    format!("Unexpected ACME order status: {:?}", status)
+                } else {
+                    format!(
+                        "Unexpected ACME order status: {:?}. Diagnostics: {}",
+                        status,
+                        failure_reasons.join("; ")
+                    )
+                };
+
+                if !is_last_attempt {
+                    tracing::warn!(
+                        "ACME {:?} challenge validation failed: {}. Retrying with fallback challenge strategy...",
+                        preferred_challenge,
+                        detailed_msg
+                    );
+                    last_error = Some(detailed_msg);
+                    continue;
+                } else {
+                    tracing::error!("ACME order validation failed: {}", detailed_msg);
+                    return Err(TlsError::Acme(detailed_msg));
+                }
+            }
+
+            // 6. Finalize order (generates CSR and submits to CA)
+            tracing::debug!("Finalizing ACME order (generating and submitting CSR)...");
+            let private_key_pem = order
+                .finalize()
+                .await
+                .map_err(|e| TlsError::Acme(format!("Failed to finalize ACME order: {}", e)))?;
+
+            // 7. Download Certificate Chain
+            tracing::debug!("Downloading certificate chain from ACME CA...");
+            let cert_chain_pem = order
+                .poll_certificate(&RetryPolicy::default())
+                .await
+                .map_err(|e| TlsError::Acme(format!("Failed to download certificate: {}", e)))?;
+
+            tracing::info!(
+                "Successfully obtained certificate chain for {:?} from ACME CA ({}) via {:?}",
+                identifiers_str,
+                self.directory_url,
+                preferred_challenge
+            );
+            return Ok((cert_chain_pem, private_key_pem));
         }
 
-        // 6. Finalize order (generates CSR and submits to CA)
-        tracing::debug!("Finalizing ACME order (generating and submitting CSR)...");
-        let private_key_pem = order
-            .finalize()
-            .await
-            .map_err(|e| TlsError::Acme(format!("Failed to finalize ACME order: {}", e)))?;
-
-        // 7. Download Certificate Chain
-        tracing::debug!("Downloading certificate chain from ACME CA...");
-        let cert_chain_pem = order
-            .poll_certificate(&RetryPolicy::default())
-            .await
-            .map_err(|e| TlsError::Acme(format!("Failed to download certificate: {}", e)))?;
-
-        tracing::info!(
-            "Successfully obtained certificate chain for {:?} from ACME CA ({})",
-            identifiers_str,
-            self.directory_url
-        );
-        Ok((cert_chain_pem, private_key_pem))
+        Err(TlsError::Acme(
+            last_error.unwrap_or_else(|| "All ACME challenge attempts failed".to_string()),
+        ))
     }
 }

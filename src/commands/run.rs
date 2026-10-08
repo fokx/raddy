@@ -7,7 +7,7 @@ use raddy_admin::{AdminServer, AppState as AdminAppState};
 use raddy_caddyfile::adapt_caddyfile;
 use raddy_core::config::Config;
 use raddy_core::module::ModuleRegistry;
-use raddy_tls::TlsManager;
+use raddy_tls::{ChallengeTypePreference, TlsManager};
 
 use crate::commands::config_ops::load_or_adapt;
 use crate::commands::info::print_environ;
@@ -90,10 +90,29 @@ async fn run_server_loop(
         .unwrap_or(false);
 
     tracing::info!("Raddy server initializing...");
-    let (email, mut ca_url, mut staging) = if let Some(tls) = initial_config.tls_app() {
+    let (email, mut ca_url, mut staging, challenge_pref) = if let Some(tls) = initial_config.tls_app() {
         let is_staging = tls.staging.unwrap_or(false)
             || tls.acme_ca.as_deref().map(|ca| ca.contains("staging")).unwrap_or(false);
-        (tls.email, tls.acme_ca, is_staging)
+        let pref = if tls.disable_http_challenge == Some(true) {
+            ChallengeTypePreference::TlsAlpnOnly
+        } else if tls.disable_tls_alpn_challenge == Some(true) {
+            ChallengeTypePreference::Http01Only
+        } else if let Some(ref chs) = tls.challenges {
+            let has_alpn = chs.iter().any(|c| c == "tls-alpn-01" || c == "tls-alpn");
+            let has_http = chs.iter().any(|c| c == "http-01" || c == "http");
+            if has_alpn && !has_http {
+                ChallengeTypePreference::TlsAlpnOnly
+            } else if has_http && !has_alpn {
+                ChallengeTypePreference::Http01Only
+            } else if chs.first().map(|c| c == "http-01" || c == "http").unwrap_or(false) {
+                ChallengeTypePreference::Http01First
+            } else {
+                ChallengeTypePreference::TlsAlpnFirst
+            }
+        } else {
+            ChallengeTypePreference::TlsAlpnFirst
+        };
+        (tls.email, tls.acme_ca, is_staging, pref)
     } else {
         let is_staging = std::env::var("RADDY_ACME_STAGING")
             .or_else(|_| std::env::var("RADDY_ACME_DEV"))
@@ -103,6 +122,7 @@ async fn run_server_loop(
             std::env::var("RADDY_ACME_EMAIL").ok(),
             std::env::var("RADDY_ACME_CA").ok(),
             is_staging,
+            ChallengeTypePreference::TlsAlpnFirst,
         )
     };
 
@@ -125,16 +145,23 @@ async fn run_server_loop(
     } else {
         raddy_core::config::LETS_ENCRYPT_PRODUCTION
     });
-    tracing::info!("Automated TLS provider: CA='{}' (staging: {})", ca_display, staging);
+    tracing::info!(
+        "Automated TLS provider: CA='{}' (staging: {}, challenge strategy: {:?})",
+        ca_display,
+        staging,
+        challenge_pref
+    );
     if cli_debug {
         tracing::debug!("Debug mode active: full tracing enabled for TLS, ACME, and HTTP");
     }
 
-    let tls_manager = if let Some(ref ca) = ca_url {
-        Arc::new(TlsManager::new_with_ca(email, ca.clone())?)
+    let mut tls_mgr = if let Some(ref ca) = ca_url {
+        TlsManager::new_with_ca(email, ca.clone())?
     } else {
-        Arc::new(TlsManager::new(email, staging)?)
+        TlsManager::new(email, staging)?
     };
+    tls_mgr = tls_mgr.with_challenge_preference(challenge_pref);
+    let tls_manager = Arc::new(tls_mgr);
     let state = Arc::new(AdminAppState::new(
         initial_config.clone(),
         registry,

@@ -26,8 +26,8 @@ pub struct HttpServerInstance {
     pub challenge_store: Option<raddy_tls::acme::Http01ChallengeStore>,
     pub log_pipeline: Option<Arc<crate::logging::LogPipeline>>,
     pub server_logs: Option<raddy_core::config::ServerLogConfig>,
-    listener: Option<TcpListener>,
-    local_addr: Option<SocketAddr>,
+    listeners: Vec<TcpListener>,
+    local_addrs: Vec<SocketAddr>,
 }
 
 impl HttpServerInstance {
@@ -44,8 +44,8 @@ impl HttpServerInstance {
             challenge_store: None,
             log_pipeline: None,
             server_logs: None,
-            listener: None,
-            local_addr: None,
+            listeners: Vec::new(),
+            local_addrs: Vec::new(),
         }
     }
 
@@ -79,50 +79,88 @@ impl HttpServerInstance {
         self
     }
 
-    /// Binds the TCP listener (and UDP endpoint for HTTP/3 if configured).
+    /// Binds the TCP listeners (supporting dual-stack IPv4/IPv6) and UDP endpoint for HTTP/3 if configured.
     pub async fn bind(&mut self) -> Result<()> {
-        let addr_str = if self.listen_addr.starts_with(':') {
-            format!("0.0.0.0{}", self.listen_addr)
+        let mut bound_listeners = Vec::new();
+        let mut bound_addrs = Vec::new();
+
+        if self.listen_addr.starts_with(':') {
+            let port: u16 = self.listen_addr[1..].parse().map_err(|e| {
+                HttpServerError::Server(format!("Invalid port in listen_addr '{}': {}", self.listen_addr, e))
+            })?;
+
+            // 1. Bind IPv4 (0.0.0.0:port)
+            let v4_addr = SocketAddr::from(([0, 0, 0, 0], port));
+            match bind_tcp_listener(v4_addr, false) {
+                Ok(l) => {
+                    let addr = l.local_addr()?;
+                    bound_addrs.push(addr);
+                    bound_listeners.push(l);
+                }
+                Err(e) => {
+                    tracing::debug!("IPv4 bind on 0.0.0.0:{} failed: {}", port, e);
+                }
+            }
+
+            // Effective port if ephemeral port (0) was specified
+            let effective_port = bound_addrs.first().map(|a| a.port()).unwrap_or(port);
+
+            // 2. Bind IPv6 ([::]:effective_port) with v6_only = true so it coexists cleanly with IPv4
+            let v6_addr = SocketAddr::from(([0u16; 8], effective_port));
+            match bind_tcp_listener(v6_addr, true) {
+                Ok(l) => {
+                    let addr = l.local_addr()?;
+                    bound_addrs.push(addr);
+                    bound_listeners.push(l);
+                }
+                Err(e) => {
+                    tracing::debug!("IPv6 bind on [::]:{} failed: {}", effective_port, e);
+                }
+            }
+
+            if bound_listeners.is_empty() {
+                return Err(HttpServerError::Server(format!(
+                    "Failed to bind any TCP listener for '{}'",
+                    self.listen_addr
+                )));
+            }
         } else {
-            self.listen_addr.clone()
-        };
-
-        let sock_addr: SocketAddr = tokio::net::lookup_host(&addr_str)
-            .await?
-            .next()
-            .ok_or_else(|| HttpServerError::Server(format!("Failed to resolve address: {}", addr_str)))?;
-
-        let domain = if sock_addr.is_ipv6() {
-            socket2::Domain::IPV6
-        } else {
-            socket2::Domain::IPV4
-        };
-
-        let socket = socket2::Socket::new(domain, socket2::Type::STREAM, None)?;
-        socket.set_reuse_address(true)?;
-        #[cfg(all(unix, not(target_os = "solaris"), not(target_os = "illumos")))]
-        let _ = socket.set_reuse_port(true);
-        socket.set_nonblocking(true)?;
-        socket.bind(&sock_addr.into())?;
-        socket.listen(1024)?;
-
-        let std_listener: std::net::TcpListener = socket.into();
-        let listener = TcpListener::from_std(std_listener)?;
-        let local_addr = listener.local_addr()?;
-        self.local_addr = Some(local_addr);
-        self.listener = Some(listener);
-
-        // Bind QUIC UDP endpoint on the same address if TLS and h3 are enabled
-        if self.tls_acceptor.is_some() && self.protocols.iter().any(|p| p == "h3") {
-            if let Some(quic_cfg) = self.quic_server_config.take() {
-                match quinn::Endpoint::server(quic_cfg, local_addr) {
-                    Ok(ep) => {
-                        tracing::info!("Server '{}' [HTTP/3 QUIC] successfully bound to UDP {}", self.name, local_addr);
-                        self.quic_endpoint = Some(ep);
-                        self.alt_svc_port = Some(local_addr.port());
+            let addrs = tokio::net::lookup_host(&self.listen_addr).await?;
+            let mut last_err = None;
+            for addr in addrs {
+                match bind_tcp_listener(addr, false) {
+                    Ok(l) => {
+                        bound_addrs.push(l.local_addr()?);
+                        bound_listeners.push(l);
                     }
                     Err(e) => {
-                        tracing::warn!("Failed to bind QUIC endpoint on UDP {}: {}", local_addr, e);
+                        last_err = Some(e);
+                    }
+                }
+            }
+            if bound_listeners.is_empty() {
+                return Err(last_err.unwrap_or_else(|| {
+                    HttpServerError::Server(format!("Failed to resolve address: {}", self.listen_addr))
+                }));
+            }
+        }
+
+        self.listeners = bound_listeners;
+        self.local_addrs = bound_addrs.clone();
+
+        // Bind QUIC UDP endpoint on the primary bound address if TLS and h3 are enabled
+        if self.tls_acceptor.is_some() && self.protocols.iter().any(|p| p == "h3") {
+            if let Some(quic_cfg) = self.quic_server_config.take() {
+                if let Some(&primary_addr) = self.local_addrs.first() {
+                    match quinn::Endpoint::server(quic_cfg, primary_addr) {
+                        Ok(ep) => {
+                            tracing::info!("Server '{}' [HTTP/3 QUIC] successfully bound to UDP {}", self.name, primary_addr);
+                            self.quic_endpoint = Some(ep);
+                            self.alt_svc_port = Some(primary_addr.port());
+                        }
+                        Err(e) => {
+                            tracing::warn!("Failed to bind QUIC endpoint on UDP {}: {}", primary_addr, e);
+                        }
                     }
                 }
             }
@@ -133,19 +171,25 @@ impl HttpServerInstance {
         } else {
             "HTTP (HTTP/1.1, HTTP/2 Cleartext)"
         };
-        tracing::info!("Server '{}' [{}] successfully bound to {}", self.name, proto, local_addr);
+        let addrs_str = self.local_addrs.iter().map(|a| a.to_string()).collect::<Vec<_>>().join(", ");
+        tracing::info!("Server '{}' [{}] successfully bound to {}", self.name, proto, addrs_str);
         Ok(())
     }
 
     pub fn local_addr(&self) -> Option<SocketAddr> {
-        self.local_addr
+        self.local_addrs.first().copied()
+    }
+
+    pub fn local_addrs(&self) -> &[SocketAddr] {
+        &self.local_addrs
     }
 
     /// Runs the connection acceptance loop until shutdown is signaled.
     pub async fn run(mut self, mut shutdown_rx: watch::Receiver<bool>) -> Result<()> {
-        let listener = self.listener.take().ok_or_else(|| {
-            HttpServerError::Server("Server instance not bound. Call bind() first.".into())
-        })?;
+        let listeners = std::mem::take(&mut self.listeners);
+        if listeners.is_empty() {
+            return Err(HttpServerError::Server("Server instance not bound. Call bind() first.".into()));
+        }
 
         let router = self.router.clone();
         let tls_acceptor = self.tls_acceptor.clone();
@@ -156,96 +200,131 @@ impl HttpServerInstance {
         let log_pipeline = self.log_pipeline.clone();
         let server_logs = self.server_logs.clone();
 
-        loop {
-            tokio::select! {
-                res = listener.accept() => {
-                    match res {
-                        Ok((tcp_stream, remote_addr)) => {
-                            let router_clone = router.clone();
-                            let builder = auto_builder.clone();
-                            let acceptor_opt = tls_acceptor.clone();
-                            let challenge_store_clone = challenge_store.clone();
-                            let log_pipe = log_pipeline.clone();
-                            let srv_logs = server_logs.clone();
-                            let mut conn_shutdown_rx = shutdown_rx.clone();
+        let mut set = tokio::task::JoinSet::new();
 
-                            tokio::spawn(async move {
-                                if let Some(acceptor) = acceptor_opt {
-                                    // TLS handshake (HTTP/1.1 or HTTP/2)
-                                    let tls_stream = match acceptor.accept(tcp_stream).await {
-                                        Ok(s) => s,
-                                        Err(e) => {
-                                            tracing::debug!("TLS handshake failed: {}", e);
-                                            return;
-                                        }
-                                    };
-                                    let tls_sni = tls_stream.get_ref().1.server_name().map(|s| s.to_string());
-                                    let io = TokioIo::new(tls_stream);
-                                    let cstore = challenge_store_clone.clone();
-                                    let lp = log_pipe.clone();
-                                    let sl = srv_logs.clone();
-                                    let service = hyper::service::service_fn(move |req| {
-                                        let r = router_clone.clone();
-                                        let cs = cstore.clone();
-                                        let pipe = lp.clone();
-                                        let logs = sl.clone();
-                                        let sni = tls_sni.clone();
-                                        async move {
-                                            handle_request(req, Some(remote_addr), r, alt_svc_port, cs, pipe, logs, sni).await
-                                        }
-                                    });
+        for listener in listeners {
+            let router_clone = router.clone();
+            let tls_acceptor_clone = tls_acceptor.clone();
+            let challenge_store_clone = challenge_store.clone();
+            let auto_builder_clone = auto_builder.clone();
+            let alt_svc_port_val = alt_svc_port;
+            let log_pipeline_clone = log_pipeline.clone();
+            let server_logs_clone = server_logs.clone();
+            let mut conn_shutdown_rx = shutdown_rx.clone();
+            let listen_addr_str = self.listen_addr.clone();
 
-                                    let conn = builder.serve_connection_with_upgrades(io, service).into_owned();
-                                    tokio::pin!(conn);
-                                    tokio::select! {
-                                        res = &mut conn => {
-                                            if let Err(err) = res {
-                                                tracing::debug!("HTTPS connection error: {}", err);
+            set.spawn(async move {
+                loop {
+                    tokio::select! {
+                        res = listener.accept() => {
+                            match res {
+                                Ok((tcp_stream, remote_addr)) => {
+                                    let router_task = router_clone.clone();
+                                    let builder_task = auto_builder_clone.clone();
+                                    let acceptor_task = tls_acceptor_clone.clone();
+                                    let challenge_store_task = challenge_store_clone.clone();
+                                    let log_pipe_task = log_pipeline_clone.clone();
+                                    let srv_logs_task = server_logs_clone.clone();
+                                    let mut per_conn_shutdown_rx = conn_shutdown_rx.clone();
+
+                                    tokio::spawn(async move {
+                                        if let Some(acceptor) = acceptor_task {
+                                            // TLS handshake (HTTP/1.1 or HTTP/2)
+                                            let tls_stream = match acceptor.accept(tcp_stream).await {
+                                                Ok(s) => s,
+                                                Err(e) => {
+                                                    tracing::debug!("TLS handshake failed: {}", e);
+                                                    return;
+                                                }
+                                            };
+                                            let tls_sni = tls_stream.get_ref().1.server_name().map(|s| s.to_string());
+                                            let negotiated_alpn = tls_stream.get_ref().1.alpn_protocol();
+                                            if negotiated_alpn == Some(b"acme-tls/1") {
+                                                tracing::info!(
+                                                    "Completed ACME TLS-ALPN-01 handshake for SNI {:?} from {}",
+                                                    tls_sni,
+                                                    remote_addr
+                                                );
+                                                return;
+                                            }
+                                            let io = TokioIo::new(tls_stream);
+                                            let cstore = challenge_store_task.clone();
+                                            let lp = log_pipe_task.clone();
+                                            let sl = srv_logs_task.clone();
+                                            let service = hyper::service::service_fn(move |req| {
+                                                let r = router_task.clone();
+                                                let cs = cstore.clone();
+                                                let pipe = lp.clone();
+                                                let logs = sl.clone();
+                                                let sni = tls_sni.clone();
+                                                async move {
+                                                    handle_request(req, Some(remote_addr), r, alt_svc_port_val, cs, pipe, logs, sni).await
+                                                }
+                                            });
+
+                                            let conn = builder_task.serve_connection_with_upgrades(io, service).into_owned();
+                                            tokio::pin!(conn);
+                                            tokio::select! {
+                                                res = &mut conn => {
+                                                    if let Err(err) = res {
+                                                        tracing::debug!("HTTPS connection error: {}", err);
+                                                    }
+                                                }
+                                                _ = per_conn_shutdown_rx.changed() => {
+                                                    conn.as_mut().graceful_shutdown();
+                                                    let _ = conn.await;
+                                                }
+                                            }
+                                        } else {
+                                            // Cleartext HTTP (HTTP/1.1 or HTTP/2 cleartext)
+                                            let io = TokioIo::new(tcp_stream);
+                                            let cstore = challenge_store_task.clone();
+                                            let lp = log_pipe_task.clone();
+                                            let sl = srv_logs_task.clone();
+                                            let service = hyper::service::service_fn(move |req| {
+                                                let r = router_task.clone();
+                                                let cs = cstore.clone();
+                                                let pipe = lp.clone();
+                                                let logs = sl.clone();
+                                                async move {
+                                                    handle_request(req, Some(remote_addr), r, None, cs, pipe, logs, None).await
+                                                }
+                                            });
+
+                                            let conn = builder_task.serve_connection_with_upgrades(io, service).into_owned();
+                                            tokio::pin!(conn);
+                                            tokio::select! {
+                                                res = &mut conn => {
+                                                    if let Err(err) = res {
+                                                        tracing::debug!("HTTP connection error: {}", err);
+                                                    }
+                                                }
+                                                _ = per_conn_shutdown_rx.changed() => {
+                                                    conn.as_mut().graceful_shutdown();
+                                                    let _ = conn.await;
+                                                }
                                             }
                                         }
-                                        _ = conn_shutdown_rx.changed() => {
-                                            conn.as_mut().graceful_shutdown();
-                                            let _ = conn.await;
-                                        }
-                                    }
-                                } else {
-                                    // Cleartext HTTP (HTTP/1.1 or HTTP/2 cleartext)
-                                    let io = TokioIo::new(tcp_stream);
-                                    let cstore = challenge_store_clone.clone();
-                                    let lp = log_pipe.clone();
-                                    let sl = srv_logs.clone();
-                                    let service = hyper::service::service_fn(move |req| {
-                                        let r = router_clone.clone();
-                                        let cs = cstore.clone();
-                                        let pipe = lp.clone();
-                                        let logs = sl.clone();
-                                        async move {
-                                            handle_request(req, Some(remote_addr), r, None, cs, pipe, logs, None).await
-                                        }
                                     });
-
-                                    let conn = builder.serve_connection_with_upgrades(io, service).into_owned();
-                                    tokio::pin!(conn);
-                                    tokio::select! {
-                                        res = &mut conn => {
-                                            if let Err(err) = res {
-                                                tracing::debug!("HTTP connection error: {}", err);
-                                            }
-                                        }
-                                        _ = conn_shutdown_rx.changed() => {
-                                            conn.as_mut().graceful_shutdown();
-                                            let _ = conn.await;
-                                        }
-                                    }
                                 }
-                            });
+                                Err(e) => {
+                                    tracing::warn!("TCP accept error on {}: {}", listen_addr_str, e);
+                                }
+                            }
                         }
-                        Err(e) => {
-                            tracing::warn!("TCP accept error on {}: {}", self.listen_addr, e);
+
+                        _ = conn_shutdown_rx.changed() => {
+                            if *conn_shutdown_rx.borrow() {
+                                break;
+                            }
                         }
                     }
                 }
+            });
+        }
 
+        loop {
+            tokio::select! {
                 Some(incoming) = async {
                     if let Some(ref ep) = quic_endpoint {
                         ep.accept().await
@@ -283,8 +362,35 @@ impl HttpServerInstance {
             }
         }
 
+        while let Some(res) = set.join_next().await {
+            if let Err(e) = res {
+                tracing::error!("TCP accept task join error: {}", e);
+            }
+        }
+
         Ok(())
     }
+}
+
+fn bind_tcp_listener(addr: SocketAddr, v6_only: bool) -> Result<TcpListener> {
+    let domain = if addr.is_ipv6() {
+        socket2::Domain::IPV6
+    } else {
+        socket2::Domain::IPV4
+    };
+    let socket = socket2::Socket::new(domain, socket2::Type::STREAM, None)?;
+    if addr.is_ipv6() {
+        let _ = socket.set_only_v6(v6_only);
+    }
+    socket.set_reuse_address(true)?;
+    #[cfg(all(unix, not(target_os = "solaris"), not(target_os = "illumos")))]
+    let _ = socket.set_reuse_port(true);
+    socket.set_nonblocking(true)?;
+    socket.bind(&addr.into())?;
+    socket.listen(1024)?;
+    let std_listener: std::net::TcpListener = socket.into();
+    let listener = TcpListener::from_std(std_listener)?;
+    Ok(listener)
 }
 
 /// Manager responsible for instantiating and coordinating HTTP/HTTPS servers from configuration.

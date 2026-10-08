@@ -32,11 +32,17 @@ impl SniResolver {
     }
 
     pub fn insert_alpn_challenge(&self, name: impl Into<String>, key: Arc<CertifiedKey>) {
-        self.alpn_challenge_certs.write().insert(name.into().to_lowercase(), key);
+        let key_str = name.into().trim().trim_end_matches('.').to_lowercase();
+        self.alpn_challenge_certs.write().insert(key_str, key);
     }
 
     pub fn remove_alpn_challenge(&self, name: &str) {
-        self.alpn_challenge_certs.write().remove(&name.to_lowercase());
+        let key_str = name.trim().trim_end_matches('.').to_lowercase();
+        self.alpn_challenge_certs.write().remove(&key_str);
+    }
+
+    pub fn alpn_challenge_count(&self) -> usize {
+        self.alpn_challenge_certs.read().len()
     }
 
     pub fn cert_count(&self) -> usize {
@@ -56,23 +62,26 @@ impl std::fmt::Debug for SniResolver {
 
 impl ResolvesServerCert for SniResolver {
     fn resolve(&self, client_hello: ClientHello<'_>) -> Option<Arc<CertifiedKey>> {
-        // If client connects with ALPN "acme-tls/1", resolve from alpn_challenge_certs (RFC 8737)
+        // If client connects with ALPN "acme-tls/1", resolve strictly from alpn_challenge_certs (RFC 8737)
         let is_acme_alpn = client_hello
             .alpn()
             .map(|mut it| it.any(|p| p == b"acme-tls/1"))
             .unwrap_or(false);
 
         if is_acme_alpn {
+            let challenges = self.alpn_challenge_certs.read();
             if let Some(sni) = client_hello.server_name() {
-                if let Some(cert) = self.alpn_challenge_certs.read().get(&sni.to_lowercase()) {
+                let sni_clean = sni.trim().trim_end_matches('.').to_lowercase();
+                if let Some(cert) = challenges.get(&sni_clean) {
                     return Some(cert.clone());
                 }
             }
             // Fallback for IP address challenge or single active ALPN challenge
-            let challenges = self.alpn_challenge_certs.read();
             if challenges.len() == 1 {
                 return challenges.values().next().cloned();
             }
+            // RFC 8737 §3: Must NOT serve normal certificates for acme-tls/1
+            return None;
         }
 
         if let Some(sni) = client_hello.server_name() {

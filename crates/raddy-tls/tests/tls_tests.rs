@@ -183,3 +183,49 @@ async fn test_caddy_compatibility_and_account_storage() {
     let _ = tokio::fs::remove_dir_all(&temp_dir).await;
 }
 
+#[tokio::test]
+async fn test_tls_alpn_challenge_cert_generation_and_sni_resolution() {
+    use rcgen::{CertificateParams, CustomExtension, KeyPair, PKCS_ECDSA_P256_SHA256, SanType};
+    use ring::digest::{digest, SHA256};
+    use raddy_tls::ChallengeTypePreference;
+
+    // Simulate ACME key authorization and SHA-256 digest calculation (RFC 8737 §3)
+    let domain = "ams.eeeu.de";
+    let key_auth = "dummy_token.dummy_thumbprint_key_auth_string";
+    let key_digest = digest(&SHA256, key_auth.as_bytes());
+
+    let mut params = CertificateParams::default();
+    let ext = CustomExtension::new_acme_identifier(key_digest.as_ref());
+    params.custom_extensions.push(ext);
+
+    let dns_name: rcgen::Ia5String = domain.try_into().unwrap();
+    params.subject_alt_names.push(SanType::DnsName(dns_name));
+
+    let leaf_key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).unwrap();
+    let leaf_cert = params.self_signed(&leaf_key).unwrap();
+    let certified_key = parse_certified_key(&leaf_cert.pem(), &leaf_key.serialize_pem()).unwrap();
+
+    let resolver = SniResolver::new();
+    assert_eq!(resolver.alpn_challenge_count(), 0);
+
+    // Insert ALPN challenge
+    resolver.insert_alpn_challenge(domain, certified_key.clone());
+    assert_eq!(resolver.alpn_challenge_count(), 1);
+
+    // Test case insensitive and dot-normalized retrieval
+    resolver.insert_alpn_challenge("AMS.EEEU.DE.", certified_key.clone());
+    assert_eq!(resolver.alpn_challenge_count(), 1);
+
+    // Remove ALPN challenge
+    resolver.remove_alpn_challenge("ams.eeeu.de");
+    assert_eq!(resolver.alpn_challenge_count(), 0);
+
+    // Test TlsManager default challenge preference is TlsAlpnFirst
+    let manager = TlsManager::new(None, true).unwrap();
+    assert_eq!(manager.challenge_preference(), ChallengeTypePreference::TlsAlpnFirst);
+
+    // Test with_challenge_preference
+    let manager = manager.with_challenge_preference(ChallengeTypePreference::TlsAlpnOnly);
+    assert_eq!(manager.challenge_preference(), ChallengeTypePreference::TlsAlpnOnly);
+}
+

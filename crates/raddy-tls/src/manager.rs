@@ -3,7 +3,10 @@ use std::sync::Arc;
 use ipnet::IpNet;
 use rustls::server::ServerConfig;
 use tokio_rustls::TlsAcceptor;
-use crate::acme::{AcmeClient, Http01ChallengeStore, LETS_ENCRYPT_PRODUCTION, LETS_ENCRYPT_STAGING};
+use crate::acme::{
+    AcmeClient, ChallengeTypePreference, Http01ChallengeStore, LETS_ENCRYPT_PRODUCTION,
+    LETS_ENCRYPT_STAGING,
+};
 use crate::error::Result;
 use crate::local_ca::LocalCa;
 use crate::sni::SniResolver;
@@ -49,15 +52,28 @@ impl TlsManager {
         Self::new_with_ca(email, acme_url)
     }
 
+    pub fn with_challenge_preference(mut self, pref: ChallengeTypePreference) -> Self {
+        self.acme = Arc::new((*self.acme).clone().with_challenge_preference(pref));
+        self
+    }
+
+    pub fn challenge_preference(&self) -> ChallengeTypePreference {
+        self.acme.challenge_preference()
+    }
+
     pub fn with_storage(mut self, storage: Arc<dyn CertStorage>) -> Self {
+        let pref = self.acme.challenge_preference();
         self.storage = storage.clone();
-        self.acme = Arc::new(AcmeClient::new(
-            self.acme.directory_url().to_string(),
-            self.acme.email().map(|s| s.to_string()),
-            self.acme.challenge_store().clone(),
-            self.sni_resolver.clone(),
-            storage,
-        ));
+        self.acme = Arc::new(
+            AcmeClient::new(
+                self.acme.directory_url().to_string(),
+                self.acme.email().map(|s| s.to_string()),
+                self.acme.challenge_store().clone(),
+                self.sni_resolver.clone(),
+                storage,
+            )
+            .with_challenge_preference(pref),
+        );
         self
     }
 

@@ -366,3 +366,53 @@ async fn test_admin_api_adapt_and_upstreams() {
     assert_eq!(upstreams[0]["dial"], "127.0.0.1:8001");
     assert_eq!(upstreams[1]["dial"], "127.0.0.1:8002");
 }
+
+#[tokio::test]
+async fn test_caddyfile_acme_challenges_and_http_port_adaptation() {
+    let caddyfile = r#"
+    {
+        http_port 81
+        challenges tls-alpn-01
+    }
+    :443, ams.eeeu.de:443 {
+        respond "ok" 200
+    }
+    "#;
+
+    let config = adapt_caddyfile(caddyfile, Path::new(".")).unwrap();
+    let http = config.http_app().unwrap();
+    let tls = config.tls_app().unwrap();
+
+    // Verify HTTP listener on port 81
+    assert!(http.servers.contains_key("srv_:81"));
+    let srv_81 = http.servers.get("srv_:81").unwrap();
+    assert!(srv_81.listen.contains(&":81".to_string()));
+
+    // Verify HTTPS listener on port 443
+    assert!(http.servers.contains_key("srv_:443"));
+
+    // Verify global TLS app challenges configuration
+    assert_eq!(tls.challenges.as_ref().unwrap(), &vec!["tls-alpn-01".to_string()]);
+}
+
+#[tokio::test]
+async fn test_caddyfile_site_level_tls_challenges() {
+    let caddyfile = r#"
+    example.com {
+        tls {
+            issuer acme {
+                challenges tls-alpn-01
+                disable_http_challenge
+            }
+        }
+        respond "ok" 200
+    }
+    "#;
+
+    let config = adapt_caddyfile(caddyfile, Path::new(".")).unwrap();
+    let tls = config.tls_app().unwrap();
+
+    assert_eq!(tls.challenges.as_ref().unwrap(), &vec!["tls-alpn-01".to_string()]);
+    assert_eq!(tls.disable_http_challenge, Some(true));
+}
+
