@@ -1,6 +1,6 @@
 [package]
 name = "raddyserver"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2024"
 license = "Apache-2.0"
 description = "Alias and wrapper for raddy-server, the fast, extensible web server in Rust (Caddy drop-in replacement)"
@@ -19,6 +19,6 @@ name = "raddyserver"
 path = "src/bin/raddyserver.rs"
 
 [dependencies]
-raddy-server = { version = "0.3.0", path = "../.." }
+raddy-server = { version = "0.4.0", path = "../.." }
 tokio = { version = "1", features = ["full"] }
 anyhow = "1"
