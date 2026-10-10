@@ -21,19 +21,30 @@ pub async fn reload_command(
         _ => config.extension().and_then(|ext| ext.to_str()) == Some("json"),
     };
 
-    let content_type = if is_json {
-        "application/json"
+    let (content, content_type) = if is_json {
+        let content = std::fs::read_to_string(config)
+            .with_context(|| format!("Failed to read '{}'", config.display()))?;
+        (content, "application/json")
     } else {
-        "text/caddyfile"
+        let cfg = raddy_caddyfile::adapt_caddyfile_from_file(config)
+            .map_err(|e| anyhow::anyhow!("Failed to adapt Caddyfile '{}': {}", config.display(), e))?;
+        let json_str = serde_json::to_string(&cfg)
+            .context("Failed to serialize adapted configuration to JSON")?;
+        (json_str, "application/json")
     };
 
     let client = reqwest::Client::new();
     let url = format!("{}/load", address.trim_end_matches('/'));
     tracing::info!("Sending reload request to {}...", url);
 
-    let resp = client
+    let mut req = client
         .post(&url)
-        .header("content-type", content_type)
+        .header("content-type", content_type);
+    if _force {
+        req = req.header("cache-control", "must-revalidate");
+    }
+
+    let resp = req
         .body(content)
         .send()
         .await

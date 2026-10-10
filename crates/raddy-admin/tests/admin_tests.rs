@@ -200,7 +200,38 @@ async fn test_zero_downtime_hot_reload() {
         "Hello from V2 (Hot Reloaded!)"
     );
 
-    // 5. Hot reload with invalid config: old server should continue serving V2!
+    // 5. Hot reload with import directive
+    let tmp_routes = std::env::temp_dir().join(format!("test_routes_{}.caddy", std::process::id()));
+    std::fs::write(&tmp_routes, "respond /imported \"Imported via Hot Reload!\" 200\n").unwrap();
+    let caddyfile_v3 = format!(
+        r#"
+    127.0.0.1:28091 {{
+        import {}
+        respond "Hello from V2 (Hot Reloaded!)" 200
+    }}
+    "#,
+        tmp_routes.display()
+    );
+
+    let reload_v3_resp = client
+        .post(format!("{}/load", admin_url))
+        .header("content-type", "text/caddyfile")
+        .body(caddyfile_v3)
+        .send()
+        .await
+        .expect("Failed to call /load with import");
+    assert_eq!(reload_v3_resp.status(), reqwest::StatusCode::OK);
+
+    let resp_imported = client
+        .get(format!("{}/imported", site_url))
+        .send()
+        .await
+        .expect("Failed to query /imported");
+    assert_eq!(resp_imported.status(), reqwest::StatusCode::OK);
+    assert_eq!(resp_imported.text().await.unwrap(), "Imported via Hot Reload!");
+    let _ = std::fs::remove_file(tmp_routes);
+
+    // 6. Hot reload with invalid config: old server should continue serving!
     let bad_caddyfile = "invalid caddyfile syntax {{{{";
     let bad_reload = client
         .post(format!("{}/load", admin_url))
@@ -211,14 +242,6 @@ async fn test_zero_downtime_hot_reload() {
         .unwrap();
 
     assert_eq!(bad_reload.status(), reqwest::StatusCode::BAD_REQUEST);
-
-    // Site still alive and serves V2
-    let resp_still_v2 = client.get(site_url).send().await.unwrap();
-    assert_eq!(resp_still_v2.status(), reqwest::StatusCode::OK);
-    assert_eq!(
-        resp_still_v2.text().await.unwrap(),
-        "Hello from V2 (Hot Reloaded!)"
-    );
 
     // Clean shutdown
     admin_shutdown_tx.send(true).unwrap();

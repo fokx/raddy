@@ -246,7 +246,47 @@ async fn test_cli_run_reload_and_stop() {
     let resp_v2 = client.get(site_url).send().await.unwrap();
     assert_eq!(resp_v2.text().await.unwrap(), "CLI Run V2 (Reloaded)");
 
-    // 5. Stop via CLI
+    // 5. Reload to V3 (with import directive) via CLI
+    let caddyfile_v3 = temp_dir.join("test_run_v3.caddyfile");
+    let routes_file = temp_dir.join("test_run_extra_routes");
+    fs::write(&routes_file, "respond /cli-imported \"Imported via CLI Reload!\" 200\n").unwrap();
+    let v3_content = format!(
+        r#"
+    {{
+        admin 127.0.0.1:28199
+    }}
+    127.0.0.1:28198 {{
+        import {}
+        respond "CLI Run V3" 200
+    }}
+    "#,
+        routes_file.display()
+    );
+    fs::write(&caddyfile_v3, v3_content).unwrap();
+
+    let reload_v3_output = raddy_bin()
+        .arg("reload")
+        .arg("--config")
+        .arg(&caddyfile_v3)
+        .arg("--address")
+        .arg(admin_url)
+        .output()
+        .expect("Failed to run raddy reload with import");
+
+    assert!(
+        reload_v3_output.status.success(),
+        "reload stdout: {}\nreload stderr: {}",
+        String::from_utf8_lossy(&reload_v3_output.stdout),
+        String::from_utf8_lossy(&reload_v3_output.stderr)
+    );
+
+    let resp_v3 = client.get(format!("{}/cli-imported", site_url)).send().await.unwrap();
+    assert_eq!(resp_v3.text().await.unwrap(), "Imported via CLI Reload!");
+
+    let _ = fs::remove_file(caddyfile_v3);
+    let _ = fs::remove_file(routes_file);
+
+    // 6. Stop via CLI
     let stop_output = raddy_bin()
         .arg("stop")
         .arg("--address")

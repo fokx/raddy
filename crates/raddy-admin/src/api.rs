@@ -4,8 +4,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use bytes::Bytes;
-use raddy_caddyfile::Adapter;
-use raddy_caddyfile::parse_caddyfile;
+use raddy_caddyfile::adapt_caddyfile;
 use raddy_core::config::Config;
 use std::sync::Arc;
 
@@ -124,11 +123,7 @@ async fn post_load(
     let new_config = if content_type.contains("caddyfile") || content_type.contains("text/plain") {
         let text = std::str::from_utf8(&body)
             .map_err(|e| AdminError::BadRequest(format!("Invalid UTF-8 in Caddyfile: {}", e)))?;
-        let ast = parse_caddyfile(text)
-            .map_err(|e| AdminError::BadRequest(format!("Failed to parse Caddyfile: {}", e)))?;
-        let mut adapter = Adapter::new();
-        adapter
-            .adapt(&ast)
+        adapt_caddyfile(text, ".")
             .map_err(|e| AdminError::BadRequest(format!("Failed to adapt Caddyfile: {}", e)))?
     } else {
         match serde_json::from_slice::<Config>(&body) {
@@ -136,13 +131,8 @@ async fn post_load(
             Err(e) => {
                 // Fallback attempt: if body is a Caddyfile text
                 if let Ok(text) = std::str::from_utf8(&body) {
-                    if let Ok(ast) = parse_caddyfile(text) {
-                        let mut adapter = Adapter::new();
-                        if let Ok(adapted) = adapter.adapt(&ast) {
-                            adapted
-                        } else {
-                            return Err(AdminError::Json(e));
-                        }
+                    if let Ok(adapted) = adapt_caddyfile(text, ".") {
+                        adapted
                     } else {
                         return Err(AdminError::Json(e));
                     }
@@ -192,11 +182,7 @@ async fn get_local_ca(State(state): State<Arc<AppState>>) -> Result<impl IntoRes
 async fn post_adapt(_headers: HeaderMap, body: Bytes) -> Result<Response> {
     let text = std::str::from_utf8(&body)
         .map_err(|e| AdminError::BadRequest(format!("Invalid UTF-8: {}", e)))?;
-    let ast = parse_caddyfile(text)
-        .map_err(|e| AdminError::BadRequest(format!("Failed to parse Caddyfile: {}", e)))?;
-    let mut adapter = Adapter::new();
-    let adapted = adapter
-        .adapt(&ast)
+    let adapted = adapt_caddyfile(text, ".")
         .map_err(|e| AdminError::BadRequest(format!("Failed to adapt Caddyfile: {}", e)))?;
     let json_val = serde_json::to_value(&adapted)?;
     Ok(Json(json_val).into_response())
