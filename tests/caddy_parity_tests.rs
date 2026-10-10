@@ -659,6 +659,55 @@ async fn test_user_caddyfile_adaptation_and_compilation() {
 }
 
 #[tokio::test]
+async fn test_caddyfile_import_directive_compilation() {
+    let tmp_dir = tempfile::tempdir().expect("Failed to create tempdir");
+    let routes_path = tmp_dir.path().join("extra-routes");
+    let routes_content = r#"
+redir /xdlb01db3f09e230c736a1285b388e6695204d81100a5fb8e /xdlb01db3f09e230c736a1285b388e6695204d81100a5fb8e/ 308
+handle_path /xdlb01db3f09e230c736a1285b388e6695204d81100a5fb8e/* {
+    root /* /x/dl
+    file_server {
+        browse
+        hide .git
+    }
+}
+redir /bbcdl0511bcc93a58fb9d41867f1db932014ecd08be /bbcdl0511bcc93a58fb9d41867f1db932014ecd08be/ 308
+handle_path /bbcdl0511bcc93a58fb9d41867f1db932014ecd08be/* {
+    root /* /srv/bbcdl/
+    file_server {
+        browse
+        hide .git
+    }
+}
+"#;
+    std::fs::write(&routes_path, routes_content).expect("Failed to write extra-routes");
+
+    let caddyfile = format!(
+        r#"
+:2480 {{
+    import {}
+    respond "OK" 200
+}}
+"#,
+        routes_path.display()
+    );
+
+    let config = adapt_caddyfile(&caddyfile, tmp_dir.path()).expect("Failed to adapt caddyfile with import");
+    let http = config.http_app().expect("Missing http app");
+    let registry = ModuleRegistry::new();
+
+    for (name, srv) in &http.servers {
+        let vhost_router = compile_virtual_host_router(srv, &registry);
+        assert!(
+            vhost_router.is_ok(),
+            "Failed to compile server router for '{}': {:?}",
+            name,
+            vhost_router.err()
+        );
+    }
+}
+
+#[tokio::test]
 async fn test_caddyfile_handle_errors_with_named_expression_matcher() {
     let caddyfile = r#"
     localhost:8080 {

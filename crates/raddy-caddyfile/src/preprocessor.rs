@@ -29,6 +29,7 @@ impl Preprocessor {
 
         // Expand top-level imports
         let mut top_level_imports = std::mem::take(&mut caddyfile.imports);
+        let mut top_level_import_stack = HashSet::new();
         while !top_level_imports.is_empty() {
             let next_imports = std::mem::take(&mut top_level_imports);
             for import_dir in next_imports {
@@ -45,6 +46,15 @@ impl Preprocessor {
                         continue;
                     }
                     for file_path in matched_files {
+                        let path_key = file_path.to_string_lossy().to_string();
+                        if top_level_import_stack.contains(&path_key) {
+                            return Err(ParseError::Import(format!(
+                                "Circular import detected: '{}'",
+                                path_key
+                            )));
+                        }
+                        top_level_import_stack.insert(path_key);
+
                         let content = std::fs::read_to_string(&file_path).map_err(|e| {
                             ParseError::Import(format!(
                                 "Failed to read imported file '{}': {}",
@@ -56,6 +66,10 @@ impl Preprocessor {
                         let tokens = Lexer::new(&content).tokenize()?;
                         let mut parser = Parser::new(tokens);
                         let imported_cf = parser.parse()?;
+
+                        if caddyfile.global_options.is_none() && imported_cf.global_options.is_some() {
+                            caddyfile.global_options = imported_cf.global_options;
+                        }
 
                         for (k, v) in imported_cf.snippets {
                             self.snippets.insert(k.clone(), v.clone());
@@ -70,7 +84,17 @@ impl Preprocessor {
                             caddyfile.named_routes.insert(k, v);
                         }
 
-                        top_level_imports.extend(imported_cf.imports);
+                        for mut imp in imported_cf.imports {
+                            if let Some(arg) = imp.args.first_mut() {
+                                if !self.snippets.contains_key(arg) && Path::new(arg).is_relative() {
+                                    if let Some(parent) = file_path.parent() {
+                                        let resolved = parent.join(&*arg);
+                                        *arg = resolved.to_string_lossy().to_string();
+                                    }
+                                }
+                            }
+                            top_level_imports.push(imp);
+                        }
                     }
                     continue;
                 }
@@ -82,6 +106,15 @@ impl Preprocessor {
                 };
 
                 if file_path.exists() && file_path.is_file() {
+                    let path_key = file_path.to_string_lossy().to_string();
+                    if top_level_import_stack.contains(&path_key) {
+                        return Err(ParseError::Import(format!(
+                            "Circular import detected: '{}'",
+                            path_key
+                        )));
+                    }
+                    top_level_import_stack.insert(path_key);
+
                     let content = std::fs::read_to_string(&file_path).map_err(|e| {
                         ParseError::Import(format!(
                             "Failed to read imported file '{}': {}",
@@ -93,6 +126,10 @@ impl Preprocessor {
                     let tokens = Lexer::new(&content).tokenize()?;
                     let mut parser = Parser::new(tokens);
                     let imported_cf = parser.parse()?;
+
+                    if caddyfile.global_options.is_none() && imported_cf.global_options.is_some() {
+                        caddyfile.global_options = imported_cf.global_options;
+                    }
 
                     // Merge snippets
                     for (k, v) in imported_cf.snippets {
@@ -111,7 +148,17 @@ impl Preprocessor {
                     }
 
                     // Top-level imports inside imported file
-                    top_level_imports.extend(imported_cf.imports);
+                    for mut imp in imported_cf.imports {
+                        if let Some(arg) = imp.args.first_mut() {
+                            if !self.snippets.contains_key(arg) && Path::new(arg).is_relative() {
+                                if let Some(parent) = file_path.parent() {
+                                    let resolved = parent.join(&*arg);
+                                    *arg = resolved.to_string_lossy().to_string();
+                                }
+                            }
+                        }
+                        top_level_imports.push(imp);
+                    }
                 } else if let Some(snippet) = self.snippets.get(target).cloned() {
                     let args = if import_dir.args.len() > 1 {
                         &import_dir.args[1..]
@@ -193,97 +240,117 @@ impl Preprocessor {
         args: &[String],
         block: Option<&[DirectiveNode]>,
     ) -> ParseResult<Vec<DirectiveNode>> {
-        if self.import_stack.contains(target) {
-            return Err(ParseError::Import(format!(
-                "Circular import detected: '{}'",
-                target
-            )));
+        if let Some(snippet) = self.snippets.get(target).cloned() {
+            let snippet_key = format!("snippet:{}", target);
+            if self.import_stack.contains(&snippet_key) {
+                return Err(ParseError::Import(format!(
+                    "Circular import detected: '{}'",
+                    target
+                )));
+            }
+            self.import_stack.insert(snippet_key.clone());
+            let substituted = substitute_snippet_args(&snippet.directives, args, block);
+            let res = self.expand_directive_list(&substituted);
+            self.import_stack.remove(&snippet_key);
+            return res;
         }
 
-        self.import_stack.insert(target.to_string());
-
-        let result = if let Some(snippet) = self.snippets.get(target).cloned() {
-            // Snippet import: substitute args and block
-            let substituted = substitute_snippet_args(&snippet.directives, args, block);
-            self.expand_directive_list(&substituted)
-        } else {
-            let is_glob = target.contains('*') || target.contains('?');
-            if is_glob {
-                let matched_files = resolve_glob_files(&self.base_dir, target)?;
-                if matched_files.is_empty() {
-                    tracing::warn!("No files matching import glob pattern: {}", target);
-                    Ok(Vec::new())
-                } else {
-                    let mut all_dirs = Vec::new();
-                    for file_path in matched_files {
-                        let content = std::fs::read_to_string(&file_path).map_err(|e| {
-                            ParseError::Import(format!(
-                                "Failed to read imported file '{}': {}",
-                                file_path.display(),
-                                e
-                            ))
-                        })?;
-
-                        let tokens = Lexer::new(&content).tokenize()?;
-                        let mut parser = Parser::new(tokens);
-                        let imported_cf = parser.parse()?;
-
-                        for (k, v) in imported_cf.snippets {
-                            self.snippets.insert(k, v);
-                        }
-
-                        let mut dirs = Vec::new();
-                        for site in imported_cf.site_blocks {
-                            dirs.extend(site.directives);
-                        }
-                        let substituted = substitute_snippet_args(&dirs, args, block);
-                        let expanded = self.expand_directive_list(&substituted)?;
-                        all_dirs.extend(expanded);
-                    }
-                    Ok(all_dirs)
-                }
-            } else {
-                let file_path = if Path::new(target).is_absolute() {
-                    PathBuf::from(target)
-                } else {
-                    self.base_dir.join(target)
-                };
-                if file_path.exists() && file_path.is_file() {
-                    let content = std::fs::read_to_string(&file_path).map_err(|e| {
-                        ParseError::Import(format!(
-                            "Failed to read imported file '{}': {}",
-                            file_path.display(),
-                            e
-                        ))
-                    })?;
-
-                    let tokens = Lexer::new(&content).tokenize()?;
-                    let mut parser = Parser::new(tokens);
-                    let imported_cf = parser.parse()?;
-
-                    // Collect snippets defined in the imported file
-                    for (k, v) in imported_cf.snippets {
-                        self.snippets.insert(k, v);
-                    }
-
-                    // If it has site blocks, take directives of the first site block, or top-level directives.
-                    let mut dirs = Vec::new();
-                    for site in imported_cf.site_blocks {
-                        dirs.extend(site.directives);
-                    }
-                    let substituted = substitute_snippet_args(&dirs, args, block);
-                    self.expand_directive_list(&substituted)
-                } else {
-                    Err(ParseError::Import(format!(
-                        "Snippet or file not found for import: '{}'",
-                        target
-                    )))
-                }
+        let is_glob = target.contains('*') || target.contains('?');
+        if is_glob {
+            let matched_files = resolve_glob_files(&self.base_dir, target)?;
+            if matched_files.is_empty() {
+                tracing::warn!("No files matching import glob pattern: {}", target);
+                return Ok(Vec::new());
             }
-        };
+            let mut all_dirs = Vec::new();
+            for file_path in matched_files {
+                let path_key = file_path.to_string_lossy().to_string();
+                if self.import_stack.contains(&path_key) {
+                    return Err(ParseError::Import(format!(
+                        "Circular import detected: '{}'",
+                        path_key
+                    )));
+                }
+                self.import_stack.insert(path_key.clone());
 
-        self.import_stack.remove(target);
-        result
+                let content = std::fs::read_to_string(&file_path).map_err(|e| {
+                    ParseError::Import(format!(
+                        "Failed to read imported file '{}': {}",
+                        file_path.display(),
+                        e
+                    ))
+                })?;
+
+                let tokens = Lexer::new(&content).tokenize()?;
+                let mut parser = Parser::new(tokens);
+                let (snippets, dirs) = parser.parse_imported_directives()?;
+
+                for (k, v) in snippets {
+                    self.snippets.insert(k, v);
+                }
+
+                let old_base_dir = self.base_dir.clone();
+                if let Some(parent) = file_path.parent() {
+                    self.base_dir = parent.to_path_buf();
+                }
+                let substituted = substitute_snippet_args(&dirs, args, block);
+                let expanded_res = self.expand_directive_list(&substituted);
+                self.base_dir = old_base_dir;
+                self.import_stack.remove(&path_key);
+
+                all_dirs.extend(expanded_res?);
+            }
+            return Ok(all_dirs);
+        }
+
+        let file_path = if Path::new(target).is_absolute() {
+            PathBuf::from(target)
+        } else {
+            self.base_dir.join(target)
+        };
+        if file_path.exists() && file_path.is_file() {
+            let path_key = file_path.to_string_lossy().to_string();
+            if self.import_stack.contains(&path_key) {
+                return Err(ParseError::Import(format!(
+                    "Circular import detected: '{}'",
+                    path_key
+                )));
+            }
+            self.import_stack.insert(path_key.clone());
+
+            let content = std::fs::read_to_string(&file_path).map_err(|e| {
+                ParseError::Import(format!(
+                    "Failed to read imported file '{}': {}",
+                    file_path.display(),
+                    e
+                ))
+            })?;
+
+            let tokens = Lexer::new(&content).tokenize()?;
+            let mut parser = Parser::new(tokens);
+            let (snippets, dirs) = parser.parse_imported_directives()?;
+
+            // Collect snippets defined in the imported file
+            for (k, v) in snippets {
+                self.snippets.insert(k, v);
+            }
+
+            let old_base_dir = self.base_dir.clone();
+            if let Some(parent) = file_path.parent() {
+                self.base_dir = parent.to_path_buf();
+            }
+            let substituted = substitute_snippet_args(&dirs, args, block);
+            let expanded_res = self.expand_directive_list(&substituted);
+            self.base_dir = old_base_dir;
+            self.import_stack.remove(&path_key);
+
+            expanded_res
+        } else {
+            Err(ParseError::Import(format!(
+                "Snippet or file not found for import: '{}'",
+                target
+            )))
+        }
     }
 }
 

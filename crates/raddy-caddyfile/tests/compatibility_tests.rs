@@ -467,3 +467,138 @@ fn test_caddyfile_forward_proxy_adaptation() {
     let acl = handler_cfg.details.get("acl").unwrap().as_array().unwrap();
     assert_eq!(acl.len(), 3);
 }
+
+#[test]
+fn test_import_directive_routes_and_subblocks() {
+    let tmp_dir = tempfile::tempdir().expect("Failed to create tempdir");
+    let routes_path = tmp_dir.path().join("extra-routes");
+    let routes_content = r#"
+redir /xdlb01db3f09e230c736a1285b388e6695204d81100a5fb8e /xdlb01db3f09e230c736a1285b388e6695204d81100a5fb8e/ 308
+handle_path /xdlb01db3f09e230c736a1285b388e6695204d81100a5fb8e/* {
+    root /* /x/dl
+    file_server {
+        browse
+        hide .git
+    }
+}
+redir /bbcdl0511bcc93a58fb9d41867f1db932014ecd08be /bbcdl0511bcc93a58fb9d41867f1db932014ecd08be/ 308
+handle_path /bbcdl0511bcc93a58fb9d41867f1db932014ecd08be/* {
+    root /* /srv/bbcdl/
+    file_server {
+        browse
+        hide .git
+    }
+}
+"#;
+    std::fs::write(&routes_path, routes_content).expect("Failed to write extra-routes");
+
+    let caddyfile = format!(
+        r#"
+:2480 {{
+    import {}
+    respond "OK" 200
+}}
+"#,
+        routes_path.display()
+    );
+
+    let config = adapt_caddyfile(&caddyfile, tmp_dir.path()).expect("Failed to adapt caddyfile with import");
+    let http = config.http_app().expect("Missing http app");
+    let srv = http.servers.get("srv_:2480").expect("Missing srv_:2480");
+
+    // Check redir route
+    let redir_xdlb = srv.routes.iter().find(|r| {
+        r.r#match.as_ref().map_or(false, |m_vec| {
+            m_vec.iter().any(|m| {
+                m.path.as_ref().map_or(false, |paths| {
+                    paths.iter().any(|p| p == "/xdlb01db3f09e230c736a1285b388e6695204d81100a5fb8e")
+                })
+            })
+        })
+    }).expect("Missing redir route for /xdlb");
+    assert_eq!(redir_xdlb.handle[0].handler, "static_response");
+    assert_eq!(redir_xdlb.handle[0].details.get("status_code").unwrap(), &308);
+    assert_eq!(
+        redir_xdlb.handle[0].details.get("location").unwrap(),
+        &"/xdlb01db3f09e230c736a1285b388e6695204d81100a5fb8e/"
+    );
+
+    // Check handle_path route
+    let handle_xdlb = srv.routes.iter().find(|r| {
+        r.r#match.as_ref().map_or(false, |m_vec| {
+            m_vec.iter().any(|m| {
+                m.path.as_ref().map_or(false, |paths| {
+                    paths.iter().any(|p| p == "/xdlb01db3f09e230c736a1285b388e6695204d81100a5fb8e/*")
+                })
+            })
+        })
+    }).expect("Missing handle_path route for /xdlb/*");
+    assert_eq!(handle_xdlb.handle[0].handler, "subroute");
+
+    // Ensure no unknown handler module ID was produced
+    for route in &srv.routes {
+        for h in &route.handle {
+            assert!(
+                !h.handler.starts_with('/'),
+                "Handler module name should not be a path: '{}'",
+                h.handler
+            );
+        }
+    }
+}
+
+#[test]
+fn test_import_directive_nested_and_glob() {
+    let tmp_dir = tempfile::tempdir().expect("Failed to create tempdir");
+    let conf_dir = tmp_dir.path().join("conf.d");
+    std::fs::create_dir_all(&conf_dir).unwrap();
+
+    let nested_file = conf_dir.join("sub.caddy");
+    std::fs::write(&nested_file, "header X-Sub \"nested\"\n").unwrap();
+
+    let route_a = conf_dir.join("10-route-a.conf");
+    std::fs::write(&route_a, "import sub.caddy\nredir /old-a /new-a 301\n").unwrap();
+
+    let route_b = conf_dir.join("20-route-b.conf");
+    std::fs::write(&route_b, "redir /old-b /new-b 302\n").unwrap();
+
+    let caddyfile = r#"
+:8080 {
+    import conf.d/*.conf
+    respond "root" 200
+}
+"#;
+
+    let config = adapt_caddyfile(caddyfile, tmp_dir.path()).expect("Failed to adapt caddyfile with glob import");
+    let http = config.http_app().expect("Missing http app");
+    let srv = http.servers.get("srv_:8080").expect("Missing srv_:8080");
+
+    let has_redir_a = srv.routes.iter().any(|r| {
+        r.r#match.as_ref().map_or(false, |m_vec| {
+            m_vec.iter().any(|m| {
+                m.path.as_ref().map_or(false, |p| p.contains(&"/old-a".to_string()))
+            })
+        })
+    });
+    let has_redir_b = srv.routes.iter().any(|r| {
+        r.r#match.as_ref().map_or(false, |m_vec| {
+            m_vec.iter().any(|m| {
+                m.path.as_ref().map_or(false, |p| p.contains(&"/old-b".to_string()))
+            })
+        })
+    });
+    let has_sub_header = srv.routes.iter().any(|r| {
+        r.handle.iter().any(|h| {
+            h.handler == "headers"
+                && h.details
+                    .get("set_response_headers")
+                    .and_then(|sh| sh.get("X-Sub"))
+                    .is_some()
+        })
+    });
+
+    assert!(has_redir_a, "Missing redir /old-a");
+    assert!(has_redir_b, "Missing redir /old-b");
+    assert!(has_sub_header, "Missing nested X-Sub header");
+}
+

@@ -1,6 +1,7 @@
 use crate::ast::*;
 use crate::error::{ParseError, ParseResult};
 use crate::lexer::{Token, TokenKind};
+use std::collections::HashMap;
 
 pub struct Parser {
     tokens: Vec<Token>,
@@ -154,6 +155,70 @@ impl Parser {
         }
 
         Ok(caddyfile)
+    }
+
+    /// Parses an imported file that is being included into a directive context (e.g. inside a site block or named route).
+    /// Extracts snippets defined in the file and returns all directives.
+    pub fn parse_imported_directives(
+        &mut self,
+    ) -> ParseResult<(HashMap<String, SnippetNode>, Vec<DirectiveNode>)> {
+        let mut snippets = HashMap::new();
+        let mut directives = Vec::new();
+        self.skip_newlines();
+
+        // If file starts with an open brace `{`, treat it as an enclosing block
+        if let Some(tok) = self.peek() {
+            if tok.kind == TokenKind::BlockOpen {
+                self.advance(); // consume {
+                let dirs = self.parse_directive_list(true)?;
+                self.skip_newlines();
+                return Ok((snippets, dirs));
+            }
+        }
+
+        while let Some(tok) = self.peek_skip_newlines() {
+            if tok.kind == TokenKind::Eof {
+                break;
+            }
+
+            self.skip_newlines();
+            if self.peek().map(|t| &t.kind) == Some(&TokenKind::Eof) {
+                break;
+            }
+
+            let first_tok = match self.peek() {
+                Some(t) => t.clone(),
+                None => break,
+            };
+
+            if let TokenKind::Literal(ref text) = first_tok.kind {
+                // Snippet: (name)
+                if text.starts_with('(') && text.ends_with(')') {
+                    let name = text[1..text.len() - 1].trim().to_string();
+                    let span = first_tok.span;
+                    self.advance(); // consume (name)
+                    self.skip_newlines();
+
+                    let block_dirs = self.expect_block()?;
+                    snippets.insert(
+                        name.clone(),
+                        SnippetNode {
+                            name,
+                            directives: block_dirs,
+                            span,
+                        },
+                    );
+                    self.skip_newlines();
+                    continue;
+                }
+            }
+
+            let dir = self.parse_directive_line()?;
+            directives.push(dir);
+            self.skip_newlines();
+        }
+
+        Ok((snippets, directives))
     }
 
     fn parse_site_block(&mut self) -> ParseResult<SiteBlockNode> {
