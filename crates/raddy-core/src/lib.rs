@@ -14,15 +14,15 @@ pub mod state;
 
 pub use config::{
     Config, HandlerConfig, HttpApp, HttpServer, LETS_ENCRYPT_PRODUCTION, LETS_ENCRYPT_STAGING,
-    MatcherSet, Route, ZEROSSL_PRODUCTION, resolve_acme_ca,
+    MatcherSet, MaxmindGeolocationConfig, Route, ZEROSSL_PRODUCTION, resolve_acme_ca,
 };
 pub use context::Context;
 pub use error::{CoreError, Result};
 pub use handler::{Handler, HandlerChain};
 pub use matcher::{
     CompiledMatcherSet, ExpressionMatcher, HeaderMatcher, HeaderRegexpMatcher, HostMatcher,
-    Matcher, MethodMatcher, NotMatcher, PathMatcher, PathRegexpMatcher, QueryMatcher,
-    RemoteIpMatcher,
+    Matcher, MaxmindGeolocationMatcher, MethodMatcher, NotMatcher, PathMatcher, PathRegexpMatcher,
+    QueryMatcher, RemoteIpMatcher,
 };
 pub use module::{ModuleRegistration, ModuleRegistry};
 pub use network::{

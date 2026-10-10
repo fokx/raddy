@@ -1,10 +1,11 @@
-use crate::config::{FileMatcherConfig, MatcherSet};
+use crate::config::{FileMatcherConfig, MatcherSet, MaxmindGeolocationConfig};
 use crate::context::Context;
 use crate::placeholder::{PlaceholderProvider, Replacer, eval_placeholders};
 use ipnet::IpNet;
 use regex::Regex;
 use std::collections::{HashMap, HashSet};
 use std::net::IpAddr;
+use std::sync::{Arc, RwLock};
 
 pub const PRIVATE_RANGES: &[&str] = &[
     "192.168.0.0/16",
@@ -1003,6 +1004,259 @@ fn eval_expression(expr: &str, ctx: &Context) -> bool {
     parser.parse_or().is_truthy()
 }
 
+/// MaxMind MMDB lookup record structure for GeoIP2 / GeoLite2 Country, City, and ASN databases.
+#[derive(serde::Deserialize, Default, Debug)]
+pub struct MaxmindLookupRecord<'a> {
+    #[serde(borrow, default)]
+    pub country: Option<MaxmindCountry<'a>>,
+    #[serde(default)]
+    pub location: Option<MaxmindLocation>,
+    #[serde(borrow, default)]
+    pub subdivisions: Option<Vec<MaxmindSubdivision<'a>>>,
+    #[serde(default)]
+    pub autonomous_system_number: Option<u32>,
+}
+
+#[derive(serde::Deserialize, Default, Debug)]
+pub struct MaxmindCountry<'a> {
+    pub iso_code: Option<&'a str>,
+}
+
+#[derive(serde::Deserialize, Default, Debug)]
+pub struct MaxmindLocation {
+    pub metro_code: Option<u32>,
+}
+
+#[derive(serde::Deserialize, Default, Debug)]
+pub struct MaxmindSubdivision<'a> {
+    pub iso_code: Option<&'a str>,
+}
+
+/// Matches client/remote IP against a MaxMind GeoIP database (.mmdb).
+/// Supports allow_countries, deny_countries, allow_subdivisions, deny_subdivisions,
+/// allow_metro_codes, deny_metro_codes, allow_asn, deny_asn, and "UNK" for unrecognized/unknown IPs.
+pub struct MaxmindGeolocationMatcher {
+    pub config: MaxmindGeolocationConfig,
+    reader: RwLock<Option<Arc<maxminddb::Reader<Vec<u8>>>>>,
+}
+
+impl MaxmindGeolocationMatcher {
+    pub fn new(config: MaxmindGeolocationConfig) -> Self {
+        let initial_reader = if !config.db_path.is_empty() {
+            maxminddb::Reader::open_readfile(&config.db_path).ok().map(Arc::new)
+        } else {
+            None
+        };
+
+        Self {
+            config,
+            reader: RwLock::new(initial_reader),
+        }
+    }
+
+    /// Creates a matcher with a pre-loaded MaxMind DB reader (useful for tests and in-memory databases).
+    pub fn with_reader(config: MaxmindGeolocationConfig, reader: maxminddb::Reader<Vec<u8>>) -> Self {
+        Self {
+            config,
+            reader: RwLock::new(Some(Arc::new(reader))),
+        }
+    }
+
+    fn get_or_load_reader(&self) -> Option<Arc<maxminddb::Reader<Vec<u8>>>> {
+        if let Ok(guard) = self.reader.read() {
+            if let Some(ref r) = *guard {
+                return Some(r.clone());
+            }
+        }
+
+        if self.config.db_path.is_empty() {
+            return None;
+        }
+
+        if let Ok(mut guard) = self.reader.write() {
+            if let Some(ref r) = *guard {
+                return Some(r.clone());
+            }
+            if let Ok(r) = maxminddb::Reader::open_readfile(&self.config.db_path) {
+                let arc = Arc::new(r);
+                *guard = Some(arc.clone());
+                return Some(arc);
+            }
+        }
+
+        None
+    }
+
+    pub fn extract_client_ip(ctx: &Context) -> Option<IpAddr> {
+        if let Some(ip) = ctx.get_var("client_ip").and_then(|s| s.parse::<IpAddr>().ok()) {
+            return Some(ip);
+        }
+        if let Some(ip) = ctx.get_placeholder("client_ip").and_then(|s| s.parse::<IpAddr>().ok()) {
+            return Some(ip);
+        }
+        if let Some(addr) = ctx.remote_addr {
+            return Some(addr.ip());
+        }
+        if let Some(ip) = ctx
+            .headers
+            .get("x-forwarded-for")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|f| f.split(',').next())
+            .and_then(|s| s.trim().parse::<IpAddr>().ok())
+        {
+            return Some(ip);
+        }
+        None
+    }
+}
+
+fn check_geo_allowed(item: &str, allowed_list: &[String], denied_list: &[String]) -> bool {
+    let item_clean = if item.is_empty() || item == "0" {
+        "UNK"
+    } else {
+        item
+    };
+
+    if !denied_list.is_empty() {
+        return !denied_list
+            .iter()
+            .any(|d| d.eq_ignore_ascii_case(item_clean));
+    }
+    if !allowed_list.is_empty() {
+        return allowed_list
+            .iter()
+            .any(|a| a.eq_ignore_ascii_case(item_clean));
+    }
+    true
+}
+
+fn check_geo_allowed_subdivisions(
+    items: &[&str],
+    allowed_list: &[String],
+    denied_list: &[String],
+) -> bool {
+    if !denied_list.is_empty() {
+        for &item in items {
+            let code = if item.is_empty() || item == "0" {
+                "UNK"
+            } else {
+                item
+            };
+            if denied_list.iter().any(|d| d.eq_ignore_ascii_case(code)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    if !allowed_list.is_empty() {
+        for &item in items {
+            let code = if item.is_empty() || item == "0" {
+                "UNK"
+            } else {
+                item
+            };
+            if allowed_list.iter().any(|a| a.eq_ignore_ascii_case(code)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    true
+}
+
+impl Matcher for MaxmindGeolocationMatcher {
+    fn matches(&self, ctx: &Context) -> bool {
+        let client_ip = Self::extract_client_ip(ctx);
+
+        let reader_arc = self.get_or_load_reader();
+        let lookup_opt = match (reader_arc.as_ref(), client_ip) {
+            (Some(reader), Some(ip)) => reader.lookup(ip).ok(),
+            _ => None,
+        };
+
+        let decoded: Option<MaxmindLookupRecord> = lookup_opt.as_ref().and_then(|l| {
+            l.decode::<MaxmindLookupRecord>().ok().flatten()
+        });
+
+        // 1. Country check
+        let country = decoded
+            .as_ref()
+            .and_then(|d| d.country.as_ref())
+            .and_then(|c| c.iso_code)
+            .unwrap_or("UNK");
+
+        if !check_geo_allowed(country, &self.config.allow_countries, &self.config.deny_countries) {
+            return false;
+        }
+
+        // 2. Subdivisions check
+        if let Some(subdivs) = decoded.as_ref().and_then(|d| d.subdivisions.as_ref()) {
+            if !subdivs.is_empty() {
+                let codes: Vec<&str> = subdivs
+                    .iter()
+                    .map(|s| s.iso_code.unwrap_or("UNK"))
+                    .collect();
+                if !check_geo_allowed_subdivisions(
+                    &codes,
+                    &self.config.allow_subdivisions,
+                    &self.config.deny_subdivisions,
+                ) {
+                    return false;
+                }
+            } else if !check_geo_allowed(
+                "UNK",
+                &self.config.allow_subdivisions,
+                &self.config.deny_subdivisions,
+            ) {
+                return false;
+            }
+        } else if !check_geo_allowed(
+            "UNK",
+            &self.config.allow_subdivisions,
+            &self.config.deny_subdivisions,
+        ) {
+            return false;
+        }
+
+        // 3. Metro codes check
+        let metro_str = decoded
+            .as_ref()
+            .and_then(|d| d.location.as_ref())
+            .and_then(|l| l.metro_code)
+            .filter(|&m| m != 0)
+            .map(|m| m.to_string())
+            .unwrap_or_else(|| "UNK".to_string());
+
+        if !check_geo_allowed(
+            &metro_str,
+            &self.config.allow_metro_codes,
+            &self.config.deny_metro_codes,
+        ) {
+            return false;
+        }
+
+        // 4. ASN check
+        let asn_str = decoded
+            .as_ref()
+            .and_then(|d| d.autonomous_system_number)
+            .filter(|&a| a != 0)
+            .map(|a| a.to_string())
+            .unwrap_or_else(|| "UNK".to_string());
+
+        if !check_geo_allowed(
+            &asn_str,
+            &self.config.allow_asn,
+            &self.config.deny_asn,
+        ) {
+            return false;
+        }
+
+        true
+    }
+}
+
 /// Inverted matcher (NOT).
 pub struct NotMatcher {
     pub inner: Box<dyn Matcher>,
@@ -1087,10 +1341,8 @@ impl CompiledMatcherSet {
             matchers.push(Box::new(VarsMatcher::new(vars_map.clone())));
         }
 
-        if let Some(ref vars_re) = config.vars_regexp {
-            if let Ok(m) = VarsRegexpMatcher::new(vars_re.clone()) {
-                matchers.push(Box::new(m));
-            }
+        if let Some(m) = config.vars_regexp.as_ref().and_then(|re| VarsRegexpMatcher::new(re.clone()).ok()) {
+            matchers.push(Box::new(m));
         }
 
         if let Some(ref file_cfg) = config.file {
@@ -1108,6 +1360,10 @@ impl CompiledMatcherSet {
                     inner: Box::new(inner),
                 }));
             }
+        }
+
+        if let Some(ref geo_cfg) = config.maxmind_geolocation {
+            matchers.push(Box::new(MaxmindGeolocationMatcher::new(geo_cfg.clone())));
         }
 
         Self { matchers }

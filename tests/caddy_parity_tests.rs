@@ -991,3 +991,84 @@ async fn test_reverse_proxy_streaming_large_response() {
     }
     assert_eq!(total_bytes, 1024 * 1024);
 }
+
+#[tokio::test]
+async fn test_caddyfile_maxmind_geolocation_parity() {
+    // Test 1: @allowed filter with deny_countries (matches requests NOT in deny_countries)
+    let caddyfile1 = r#"
+    localhost:8080 {
+        @allowed {
+            maxmind_geolocation {
+                db_path crates/raddy-core/tests/fixtures/GeoIP2-City-Test.mmdb
+                deny_countries GB
+            }
+        }
+        handle @allowed {
+            respond "Access Granted" 200
+        }
+        respond "Access Denied" 403
+    }
+    "#;
+
+    let config1 = adapt_caddyfile(caddyfile1, Path::new(".")).unwrap();
+    let http1 = config1.http_app().unwrap();
+    let server1 = http1.servers.values().next().unwrap();
+    let registry = ModuleRegistry::new();
+    let router1 = compile_virtual_host_router(server1, &registry).unwrap();
+
+    // UK visitor (81.2.69.160) is denied by deny_countries GB -> does not match @allowed -> gets 403
+    let mut headers_uk = HeaderMap::new();
+    headers_uk.insert(header::HOST, "localhost".parse().unwrap());
+    let mut ctx_uk = Context::new(Method::GET, "/".parse().unwrap(), headers_uk, Bytes::new());
+    ctx_uk.remote_addr = Some("81.2.69.160:12345".parse().unwrap());
+    router1.route_request(&mut ctx_uk).await.unwrap();
+    assert_eq!(ctx_uk.status, Some(StatusCode::FORBIDDEN));
+    assert_eq!(ctx_uk.response_body, Some(Bytes::from("Access Denied")));
+
+    // Other visitor (127.0.0.1) is NOT in deny_countries GB -> matches @allowed -> gets 200
+    let mut headers_local = HeaderMap::new();
+    headers_local.insert(header::HOST, "localhost".parse().unwrap());
+    let mut ctx_local = Context::new(Method::GET, "/".parse().unwrap(), headers_local, Bytes::new());
+    ctx_local.remote_addr = Some("127.0.0.1:12345".parse().unwrap());
+    router1.route_request(&mut ctx_local).await.unwrap();
+    assert_eq!(ctx_local.status, Some(StatusCode::OK));
+    assert_eq!(ctx_local.response_body, Some(Bytes::from("Access Granted")));
+
+    // Test 2: @blocked with inverted `not maxmind_geolocation`
+    let caddyfile2 = r#"
+    localhost:8080 {
+        @blocked {
+            not maxmind_geolocation {
+                db_path crates/raddy-core/tests/fixtures/GeoIP2-City-Test.mmdb
+                deny_countries GB
+            }
+        }
+        handle @blocked {
+            respond "Blocked By Geolocation" 403
+        }
+        respond "Welcome" 200
+    }
+    "#;
+
+    let config2 = adapt_caddyfile(caddyfile2, Path::new(".")).unwrap();
+    let http2 = config2.http_app().unwrap();
+    let server2 = http2.servers.values().next().unwrap();
+    let router2 = compile_virtual_host_router(server2, &registry).unwrap();
+
+    let mut headers_uk2 = HeaderMap::new();
+    headers_uk2.insert(header::HOST, "localhost".parse().unwrap());
+    let mut ctx_uk2 = Context::new(Method::GET, "/".parse().unwrap(), headers_uk2, Bytes::new());
+    ctx_uk2.remote_addr = Some("81.2.69.160:12345".parse().unwrap());
+    router2.route_request(&mut ctx_uk2).await.unwrap();
+    assert_eq!(ctx_uk2.status, Some(StatusCode::FORBIDDEN));
+    assert_eq!(ctx_uk2.response_body, Some(Bytes::from("Blocked By Geolocation")));
+
+    let mut headers_local2 = HeaderMap::new();
+    headers_local2.insert(header::HOST, "localhost".parse().unwrap());
+    let mut ctx_local2 = Context::new(Method::GET, "/".parse().unwrap(), headers_local2, Bytes::new());
+    ctx_local2.remote_addr = Some("127.0.0.1:12345".parse().unwrap());
+    router2.route_request(&mut ctx_local2).await.unwrap();
+    assert_eq!(ctx_local2.status, Some(StatusCode::OK));
+    assert_eq!(ctx_local2.response_body, Some(Bytes::from("Welcome")));
+}
+

@@ -457,7 +457,8 @@ impl Parser {
                     && name != "admin"
                     && name != "email"
                     && name != "auto_https"
-                    && name != "log";
+                    && name != "log"
+                    && name != "db_path";
                 if can_have_matcher
                     && matcher.is_none()
                     && args.is_empty()

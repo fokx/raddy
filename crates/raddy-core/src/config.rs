@@ -214,8 +214,33 @@ pub struct MatcherSet {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub not: Option<Vec<MatcherSet>>,
 
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub maxmind_geolocation: Option<MaxmindGeolocationConfig>,
+
     #[serde(flatten)]
     pub extra: HashMap<String, serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct MaxmindGeolocationConfig {
+    #[serde(default)]
+    pub db_path: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allow_countries: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub deny_countries: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allow_subdivisions: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub deny_subdivisions: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allow_metro_codes: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub deny_metro_codes: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allow_asn: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub deny_asn: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]

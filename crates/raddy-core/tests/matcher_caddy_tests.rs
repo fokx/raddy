@@ -323,3 +323,170 @@ fn test_expression_matcher() {
     let m5 = ExpressionMatcher::new("http.error.status_code == 404".to_string());
     assert!(m5.matches(&ctx));
 }
+
+#[test]
+fn test_maxmind_geolocation_matcher_countries_and_precedence() {
+    use raddy_core::{MaxmindGeolocationConfig, MaxmindGeolocationMatcher};
+
+    let fixture_path = "tests/fixtures/GeoIP2-City-Test.mmdb";
+    let db_path = if std::path::Path::new(fixture_path).exists() {
+        fixture_path.to_string()
+    } else {
+        "crates/raddy-core/tests/fixtures/GeoIP2-City-Test.mmdb".to_string()
+    };
+
+    // 81.2.69.160 is in the UK (GB) in GeoIP2-City-Test
+    let uk_addr: SocketAddr = "81.2.69.160:12345".parse().unwrap();
+    let ctx_uk = make_ctx("localhost", "GET", "/", HeaderMap::new(), Some(uk_addr));
+
+    // Test allow_countries
+    let allow_cfg = MaxmindGeolocationConfig {
+        db_path: db_path.clone(),
+        allow_countries: vec!["GB".to_string(), "US".to_string()],
+        ..Default::default()
+    };
+    let allow_matcher = MaxmindGeolocationMatcher::new(allow_cfg);
+    assert!(allow_matcher.matches(&ctx_uk), "UK IP should be allowed by [GB, US]");
+
+    let allow_other_cfg = MaxmindGeolocationConfig {
+        db_path: db_path.clone(),
+        allow_countries: vec!["FR".to_string(), "DE".to_string()],
+        ..Default::default()
+    };
+    let allow_other_matcher = MaxmindGeolocationMatcher::new(allow_other_cfg);
+    assert!(!allow_other_matcher.matches(&ctx_uk), "UK IP should NOT be allowed by [FR, DE]");
+
+    // Test deny_countries
+    let deny_cfg = MaxmindGeolocationConfig {
+        db_path: db_path.clone(),
+        deny_countries: vec!["GB".to_string(), "CN".to_string()],
+        ..Default::default()
+    };
+    let deny_matcher = MaxmindGeolocationMatcher::new(deny_cfg);
+    assert!(!deny_matcher.matches(&ctx_uk), "UK IP should be denied by [GB, CN]");
+
+    let deny_other_cfg = MaxmindGeolocationConfig {
+        db_path: db_path.clone(),
+        deny_countries: vec!["FR".to_string(), "RU".to_string()],
+        ..Default::default()
+    };
+    let deny_other_matcher = MaxmindGeolocationMatcher::new(deny_other_cfg);
+    assert!(deny_other_matcher.matches(&ctx_uk), "UK IP should NOT be denied by [FR, RU]");
+
+    // Test case-insensitivity (e.g. "gb")
+    let deny_lower_cfg = MaxmindGeolocationConfig {
+        db_path: db_path.clone(),
+        deny_countries: vec!["gb".to_string()],
+        ..Default::default()
+    };
+    let deny_lower_matcher = MaxmindGeolocationMatcher::new(deny_lower_cfg);
+    assert!(!deny_lower_matcher.matches(&ctx_uk), "Lowercase 'gb' should deny UK IP");
+
+    // Test precedence: deny_countries takes precedence over allow_countries
+    let conflict_cfg = MaxmindGeolocationConfig {
+        db_path: db_path.clone(),
+        allow_countries: vec!["GB".to_string()],
+        deny_countries: vec!["GB".to_string()],
+        ..Default::default()
+    };
+    let conflict_matcher = MaxmindGeolocationMatcher::new(conflict_cfg);
+    assert!(!conflict_matcher.matches(&ctx_uk), "deny_countries must take precedence over allow_countries");
+}
+
+#[test]
+fn test_maxmind_geolocation_matcher_subdivisions_and_unk() {
+    use raddy_core::{MaxmindGeolocationConfig, MaxmindGeolocationMatcher};
+
+    let fixture_path = "tests/fixtures/GeoIP2-City-Test.mmdb";
+    let db_path = if std::path::Path::new(fixture_path).exists() {
+        fixture_path.to_string()
+    } else {
+        "crates/raddy-core/tests/fixtures/GeoIP2-City-Test.mmdb".to_string()
+    };
+
+    // 81.2.69.160 has England (ENG) subdivision in GeoIP2-City-Test
+    let uk_addr: SocketAddr = "81.2.69.160:12345".parse().unwrap();
+    let ctx_uk = make_ctx("localhost", "GET", "/", HeaderMap::new(), Some(uk_addr));
+
+    let allow_sub_cfg = MaxmindGeolocationConfig {
+        db_path: db_path.clone(),
+        allow_subdivisions: vec!["ENG".to_string()],
+        ..Default::default()
+    };
+    let allow_sub_matcher = MaxmindGeolocationMatcher::new(allow_sub_cfg);
+    assert!(allow_sub_matcher.matches(&ctx_uk), "ENG subdivision should be allowed");
+
+    let deny_sub_cfg = MaxmindGeolocationConfig {
+        db_path: db_path.clone(),
+        deny_subdivisions: vec!["ENG".to_string()],
+        ..Default::default()
+    };
+    let deny_sub_matcher = MaxmindGeolocationMatcher::new(deny_sub_cfg);
+    assert!(!deny_sub_matcher.matches(&ctx_uk), "ENG subdivision should be denied");
+
+    // Test unknown IP ("UNK") handling with private IP 127.0.0.1
+    let local_addr: SocketAddr = "127.0.0.1:12345".parse().unwrap();
+    let ctx_local = make_ctx("localhost", "GET", "/", HeaderMap::new(), Some(local_addr));
+
+    // allow_countries without UNK denies unrecognized IP
+    let allow_no_unk = MaxmindGeolocationConfig {
+        db_path: db_path.clone(),
+        allow_countries: vec!["US".to_string(), "GB".to_string()],
+        ..Default::default()
+    };
+    assert!(!MaxmindGeolocationMatcher::new(allow_no_unk).matches(&ctx_local));
+
+    // allow_countries with UNK permits unrecognized IP
+    let allow_with_unk = MaxmindGeolocationConfig {
+        db_path: db_path.clone(),
+        allow_countries: vec!["US".to_string(), "UNK".to_string()],
+        ..Default::default()
+    };
+    assert!(MaxmindGeolocationMatcher::new(allow_with_unk).matches(&ctx_local));
+
+    // deny_countries with UNK denies unrecognized IP
+    let deny_with_unk = MaxmindGeolocationConfig {
+        db_path: db_path.clone(),
+        deny_countries: vec!["RU".to_string(), "UNK".to_string()],
+        ..Default::default()
+    };
+    assert!(!MaxmindGeolocationMatcher::new(deny_with_unk).matches(&ctx_local));
+
+    // deny_countries without UNK permits unrecognized IP
+    let deny_no_unk = MaxmindGeolocationConfig {
+        db_path: db_path.clone(),
+        deny_countries: vec!["RU".to_string(), "CN".to_string()],
+        ..Default::default()
+    };
+    assert!(MaxmindGeolocationMatcher::new(deny_no_unk).matches(&ctx_local));
+}
+
+#[test]
+fn test_maxmind_geolocation_matcher_client_ip_source() {
+    use raddy_core::{MaxmindGeolocationConfig, MaxmindGeolocationMatcher};
+
+    let fixture_path = "tests/fixtures/GeoIP2-City-Test.mmdb";
+    let db_path = if std::path::Path::new(fixture_path).exists() {
+        fixture_path.to_string()
+    } else {
+        "crates/raddy-core/tests/fixtures/GeoIP2-City-Test.mmdb".to_string()
+    };
+
+    let deny_uk_cfg = MaxmindGeolocationConfig {
+        db_path: db_path.clone(),
+        deny_countries: vec!["GB".to_string()],
+        ..Default::default()
+    };
+    let matcher = MaxmindGeolocationMatcher::new(deny_uk_cfg);
+
+    // Test client_ip from Context vars (e.g. set by trusted proxy middleware)
+    let mut ctx_var = make_ctx("localhost", "GET", "/", HeaderMap::new(), None);
+    ctx_var.set_var("client_ip", "81.2.69.160");
+    assert!(!matcher.matches(&ctx_var), "client_ip var should be inspected and denied");
+
+    // Test client_ip from X-Forwarded-For header fallback
+    let mut headers = HeaderMap::new();
+    headers.insert("x-forwarded-for", "81.2.69.160, 10.0.0.1".parse().unwrap());
+    let ctx_hdr = make_ctx("localhost", "GET", "/", headers, None);
+    assert!(!matcher.matches(&ctx_hdr), "X-Forwarded-For client IP should be inspected and denied");
+}

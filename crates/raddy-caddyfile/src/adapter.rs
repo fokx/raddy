@@ -2272,23 +2272,221 @@ fn populate_named_matcher_item(set: &mut MatcherSet, name: &str, args: &[String]
         "expression" => {
             set.expression = Some(args.join(" "));
         }
+        "maxmind_geolocation" => {
+            set.maxmind_geolocation = Some(parse_maxmind_geolocation_args(args));
+        }
         _ => {}
     }
 }
 
+fn is_maxmind_keyword(s: &str) -> bool {
+    matches!(
+        s,
+        "db_path"
+            | "allow_countries"
+            | "deny_countries"
+            | "allow_subdivisions"
+            | "deny_subdivisions"
+            | "allow_metro_codes"
+            | "deny_metro_codes"
+            | "allow_asn"
+            | "deny_asn"
+    )
+}
+
+fn parse_maxmind_geolocation_args(args: &[String]) -> MaxmindGeolocationConfig {
+    let mut cfg = MaxmindGeolocationConfig::default();
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "db_path" => {
+                if i + 1 < args.len() {
+                    cfg.db_path = args[i + 1].clone();
+                    i += 2;
+                } else {
+                    i += 1;
+                }
+            }
+            "allow_countries" => {
+                i += 1;
+                while i < args.len() && !is_maxmind_keyword(&args[i]) {
+                    cfg.allow_countries.push(args[i].clone());
+                    i += 1;
+                }
+            }
+            "deny_countries" => {
+                i += 1;
+                while i < args.len() && !is_maxmind_keyword(&args[i]) {
+                    cfg.deny_countries.push(args[i].clone());
+                    i += 1;
+                }
+            }
+            "allow_subdivisions" => {
+                i += 1;
+                while i < args.len() && !is_maxmind_keyword(&args[i]) {
+                    cfg.allow_subdivisions.push(args[i].clone());
+                    i += 1;
+                }
+            }
+            "deny_subdivisions" => {
+                i += 1;
+                while i < args.len() && !is_maxmind_keyword(&args[i]) {
+                    cfg.deny_subdivisions.push(args[i].clone());
+                    i += 1;
+                }
+            }
+            "allow_metro_codes" => {
+                i += 1;
+                while i < args.len() && !is_maxmind_keyword(&args[i]) {
+                    cfg.allow_metro_codes.push(args[i].clone());
+                    i += 1;
+                }
+            }
+            "deny_metro_codes" => {
+                i += 1;
+                while i < args.len() && !is_maxmind_keyword(&args[i]) {
+                    cfg.deny_metro_codes.push(args[i].clone());
+                    i += 1;
+                }
+            }
+            "allow_asn" => {
+                i += 1;
+                while i < args.len() && !is_maxmind_keyword(&args[i]) {
+                    cfg.allow_asn.push(args[i].clone());
+                    i += 1;
+                }
+            }
+            "deny_asn" => {
+                i += 1;
+                while i < args.len() && !is_maxmind_keyword(&args[i]) {
+                    cfg.deny_asn.push(args[i].clone());
+                    i += 1;
+                }
+            }
+            other => {
+                if cfg.db_path.is_empty() {
+                    cfg.db_path = other.to_string();
+                }
+                i += 1;
+            }
+        }
+    }
+    cfg
+}
+
+fn parse_maxmind_geolocation_directive(dir: &DirectiveNode) -> MaxmindGeolocationConfig {
+    let mut all_args = Vec::new();
+    if let Some(ref m) = dir.matcher {
+        all_args.push(m.clone());
+    }
+    all_args.extend(dir.args.clone());
+    let mut cfg = parse_maxmind_geolocation_args(&all_args);
+
+    if let Some(ref block) = dir.block {
+        for sub in block {
+            let mut sub_vals = Vec::new();
+            if let Some(ref m) = sub.matcher {
+                sub_vals.push(m.clone());
+            }
+            sub_vals.extend(sub.args.clone());
+
+            match sub.name.as_str() {
+                "db_path" => {
+                    if let Some(p) = sub_vals.first() {
+                        cfg.db_path = p.clone();
+                    }
+                }
+                "allow_countries" => {
+                    cfg.allow_countries.extend(sub_vals);
+                }
+                "deny_countries" => {
+                    cfg.deny_countries.extend(sub_vals);
+                }
+                "allow_subdivisions" => {
+                    cfg.allow_subdivisions.extend(sub_vals);
+                }
+                "deny_subdivisions" => {
+                    cfg.deny_subdivisions.extend(sub_vals);
+                }
+                "allow_metro_codes" => {
+                    cfg.allow_metro_codes.extend(sub_vals);
+                }
+                "deny_metro_codes" => {
+                    cfg.deny_metro_codes.extend(sub_vals);
+                }
+                "allow_asn" => {
+                    cfg.allow_asn.extend(sub_vals);
+                }
+                "deny_asn" => {
+                    cfg.deny_asn.extend(sub_vals);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    cfg
+}
+
 fn parse_named_matcher_block(dir: &DirectiveNode) -> ParseResult<MatcherSet> {
     let mut set = MatcherSet::default();
+
+    if dir.args.first().map(|s| s.as_str()) == Some("maxmind_geolocation") {
+        let dummy = DirectiveNode {
+            name: "maxmind_geolocation".to_string(),
+            matcher: None,
+            args: dir.args[1..].to_vec(),
+            block: dir.block.clone(),
+            span: dir.span.clone(),
+        };
+        set.maxmind_geolocation = Some(parse_maxmind_geolocation_directive(&dummy));
+        return Ok(set);
+    }
+
+    if dir.args.first().map(|s| s.as_str()) == Some("not")
+        && dir.args.get(1).map(|s| s.as_str()) == Some("maxmind_geolocation")
+    {
+        let dummy = DirectiveNode {
+            name: "maxmind_geolocation".to_string(),
+            matcher: None,
+            args: dir.args[2..].to_vec(),
+            block: dir.block.clone(),
+            span: dir.span.clone(),
+        };
+        let mut inner_set = MatcherSet::default();
+        inner_set.maxmind_geolocation = Some(parse_maxmind_geolocation_directive(&dummy));
+        set.not = Some(vec![inner_set]);
+        return Ok(set);
+    }
+
     if let Some(ref block) = dir.block {
         for sub in block {
             if sub.name == "not" {
-                let inner = if let Some(ref not_block) = sub.block {
+                let inner = if sub.args.first().map(|s| s.as_str()) == Some("maxmind_geolocation") {
+                    let dummy = DirectiveNode {
+                        name: "maxmind_geolocation".to_string(),
+                        matcher: None,
+                        args: sub.args[1..].to_vec(),
+                        block: sub.block.clone(),
+                        span: sub.span.clone(),
+                    };
+                    let mut inner_set = MatcherSet::default();
+                    inner_set.maxmind_geolocation =
+                        Some(parse_maxmind_geolocation_directive(&dummy));
+                    inner_set
+                } else if let Some(ref not_block) = sub.block {
                     let mut inner_set = MatcherSet::default();
                     for inner_sub in not_block {
-                        populate_named_matcher_item(
-                            &mut inner_set,
-                            inner_sub.name.as_str(),
-                            &inner_sub.args,
-                        );
+                        if inner_sub.name == "maxmind_geolocation" {
+                            inner_set.maxmind_geolocation =
+                                Some(parse_maxmind_geolocation_directive(inner_sub));
+                        } else {
+                            populate_named_matcher_item(
+                                &mut inner_set,
+                                inner_sub.name.as_str(),
+                                &inner_sub.args,
+                            );
+                        }
                     }
                     inner_set
                 } else if !sub.args.is_empty() {
@@ -2318,6 +2516,8 @@ fn parse_named_matcher_block(dir: &DirectiveNode) -> ParseResult<MatcherSet> {
                     }
                 }
                 set.file = Some(file_cfg);
+            } else if sub.name == "maxmind_geolocation" {
+                set.maxmind_geolocation = Some(parse_maxmind_geolocation_directive(sub));
             } else {
                 populate_named_matcher_item(&mut set, sub.name.as_str(), &sub.args);
             }
@@ -2331,6 +2531,16 @@ fn parse_named_matcher_block(dir: &DirectiveNode) -> ParseResult<MatcherSet> {
             if dir.args.len() > 1 {
                 if dir.args[1].starts_with('/') {
                     inner_set.path = Some(dir.args[1..].to_vec());
+                } else if dir.args[1] == "maxmind_geolocation" {
+                    let dummy = DirectiveNode {
+                        name: "maxmind_geolocation".to_string(),
+                        matcher: None,
+                        args: dir.args[2..].to_vec(),
+                        block: dir.block.clone(),
+                        span: dir.span.clone(),
+                    };
+                    inner_set.maxmind_geolocation =
+                        Some(parse_maxmind_geolocation_directive(&dummy));
                 } else {
                     populate_named_matcher_item(
                         &mut inner_set,
@@ -2340,6 +2550,15 @@ fn parse_named_matcher_block(dir: &DirectiveNode) -> ParseResult<MatcherSet> {
                 }
             }
             set.not = Some(vec![inner_set]);
+        } else if dir.args[0] == "maxmind_geolocation" {
+            let dummy = DirectiveNode {
+                name: "maxmind_geolocation".to_string(),
+                matcher: None,
+                args: dir.args[1..].to_vec(),
+                block: dir.block.clone(),
+                span: dir.span.clone(),
+            };
+            set.maxmind_geolocation = Some(parse_maxmind_geolocation_directive(&dummy));
         } else {
             // Standard single-line matcher: @name matcher_type [args...]
             populate_named_matcher_item(&mut set, dir.args[0].as_str(), &dir.args[1..]);
@@ -2545,6 +2764,9 @@ fn merge_matcher_set(dst: &mut MatcherSet, src: &MatcherSet) {
     }
     if let Some(ref expr) = src.expression {
         dst.expression = Some(expr.clone());
+    }
+    if let Some(ref geo) = src.maxmind_geolocation {
+        dst.maxmind_geolocation = Some(geo.clone());
     }
 }
 
@@ -2858,4 +3080,91 @@ example.com {
         assert!(handlers.contains(&"log_append"));
         assert!(handlers.contains(&"log_name"));
     }
+
+    #[test]
+    fn test_adapt_maxmind_geolocation() {
+        let input = r#"
+example.com {
+    @blocked {
+        maxmind_geolocation {
+            db_path "/path/to/GeoLite2-Country.mmdb"
+            deny_countries US CA
+        }
+    }
+    respond @blocked "Access Denied" 403
 }
+"#;
+        let tokens = Lexer::new(input).tokenize().unwrap();
+        let caddyfile = Parser::new(tokens).parse().unwrap();
+        let mut adapter = Adapter::new();
+        let config = adapter.adapt(&caddyfile).unwrap();
+
+        let http = config.http_app().unwrap();
+        let srv = http.servers.get("srv_:443").unwrap();
+        let route = srv.routes.iter().find(|r| {
+            r.r#match
+                .as_ref()
+                .map(|m| m.iter().any(|ms| ms.maxmind_geolocation.is_some()))
+                .unwrap_or(false)
+        }).expect("Route with maxmind_geolocation matcher must exist");
+
+        let matcher_set = route.r#match.as_ref().unwrap().first().unwrap();
+        let geo = matcher_set.maxmind_geolocation.as_ref().unwrap();
+        assert_eq!(geo.db_path, "/path/to/GeoLite2-Country.mmdb");
+        assert_eq!(geo.deny_countries, vec!["US", "CA"]);
+    }
+
+    #[test]
+    fn test_adapt_maxmind_geolocation_direct_and_not() {
+        let input = r#"
+example.com {
+    @direct maxmind_geolocation {
+        db_path "/path/to/GeoLite2-City.mmdb"
+        allow_countries PT US
+        allow_subdivisions NY CA
+        deny_subdivisions TX
+    }
+    @inverted {
+        not maxmind_geolocation {
+            db_path "/path/to/GeoLite2-Country.mmdb"
+            deny_countries RU CN UNK
+        }
+    }
+    respond @direct "Allowed" 200
+    respond @inverted "Inverted" 403
+}
+"#;
+        let tokens = Lexer::new(input).tokenize().unwrap();
+        let caddyfile = Parser::new(tokens).parse().unwrap();
+        let mut adapter = Adapter::new();
+        let config = adapter.adapt(&caddyfile).unwrap();
+
+        let http = config.http_app().unwrap();
+        let srv = http.servers.get("srv_:443").unwrap();
+
+        // Check @direct route
+        let direct_route = srv.routes.iter().find(|r| {
+            r.r#match
+                .as_ref()
+                .map(|m| m.iter().any(|ms| ms.maxmind_geolocation.as_ref().map(|g| g.db_path == "/path/to/GeoLite2-City.mmdb").unwrap_or(false)))
+                .unwrap_or(false)
+        }).expect("@direct route must exist");
+        let direct_geo = direct_route.r#match.as_ref().unwrap().first().unwrap().maxmind_geolocation.as_ref().unwrap();
+        assert_eq!(direct_geo.allow_countries, vec!["PT", "US"]);
+        assert_eq!(direct_geo.allow_subdivisions, vec!["NY", "CA"]);
+        assert_eq!(direct_geo.deny_subdivisions, vec!["TX"]);
+
+        // Check @inverted route
+        let inv_route = srv.routes.iter().find(|r| {
+            r.r#match
+                .as_ref()
+                .map(|m| m.iter().any(|ms| ms.not.as_ref().map(|n| n.iter().any(|sub_ms| sub_ms.maxmind_geolocation.is_some())).unwrap_or(false)))
+                .unwrap_or(false)
+        }).expect("@inverted route must exist");
+        let not_ms = inv_route.r#match.as_ref().unwrap().first().unwrap().not.as_ref().unwrap().first().unwrap();
+        let inv_geo = not_ms.maxmind_geolocation.as_ref().unwrap();
+        assert_eq!(inv_geo.db_path, "/path/to/GeoLite2-Country.mmdb");
+        assert_eq!(inv_geo.deny_countries, vec!["RU", "CN", "UNK"]);
+    }
+}
+
