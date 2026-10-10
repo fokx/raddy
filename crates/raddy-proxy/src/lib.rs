@@ -24,7 +24,7 @@ pub use load_balancer::{
     parse_load_balancer,
 };
 pub use proxy::ReverseProxyHandler;
-pub use transport::HttpTransport;
+pub use transport::{HttpTransport, UpstreamResponseBody};
 pub use upstream::Upstream;
 
 use std::collections::HashMap;

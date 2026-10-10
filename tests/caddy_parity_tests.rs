@@ -834,3 +834,111 @@ async fn test_reverse_proxy_end_to_end_with_http_scheme_dial() {
     assert!(body_text.contains("GET /arch/packages"));
     assert!(body_text.contains(&format!("host: {}", addr)));
 }
+
+#[tokio::test]
+async fn test_fileserver_url_decoded_symlink_file() {
+    use raddy_core::Handler;
+    use raddy_http::fileserver::FileServerHandler;
+    use std::fs;
+
+    // Create a temporary directory structure mimicking the user's issue:
+    // /srv/bbcdl/BBC News/BBC News, 09⧸10⧸2026 21_01 GMT [w1msm0v8hxjzf2y].mp4
+    // /srv/bbcdl/BBC News.mp4 -> symlink to the target
+    let temp_dir = tempfile::tempdir().unwrap();
+    let sub_dir = temp_dir.path().join("BBC News");
+    fs::create_dir_all(&sub_dir).unwrap();
+    let target_file = sub_dir.join("BBC News, 09⧸10⧸2026 21_01 GMT [w1msm0v8hxjzf2y].mp4");
+    fs::write(&target_file, b"fake mp4 video content").unwrap();
+
+    let symlink_path = temp_dir.path().join("BBC News.mp4");
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&target_file, &symlink_path).unwrap();
+    #[cfg(not(unix))]
+    fs::copy(&target_file, &symlink_path).unwrap();
+
+    let fs_handler = FileServerHandler::new(
+        Some(temp_dir.path().to_str().unwrap().to_string()),
+        true,
+        Vec::new(),
+    );
+
+    // Request with URL-encoded space: "BBC%20News.mp4"
+    let mut ctx = Context::new(
+        Method::GET,
+        "/BBC%20News.mp4".parse().unwrap(),
+        HeaderMap::new(),
+        Bytes::new(),
+    );
+
+    fs_handler.handle(&mut ctx).await.unwrap();
+
+    assert_eq!(ctx.status, Some(StatusCode::OK));
+    assert_eq!(
+        ctx.response_headers.get(header::CONTENT_TYPE).unwrap(),
+        "video/mp4"
+    );
+    let body = ctx.response_body.unwrap();
+    assert_eq!(body.as_ref(), b"fake mp4 video content");
+}
+
+#[tokio::test]
+async fn test_reverse_proxy_streaming_large_response() {
+    use futures_util::StreamExt;
+    use raddy_core::Handler;
+    use raddy_proxy::{First, HeaderMutator, ReverseProxyHandler, Upstream};
+    use std::sync::Arc;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    // 1. Start mock upstream returning 1MB payload (larger than 64KB threshold)
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+
+    tokio::spawn(async move {
+        while let Ok((mut stream, _)) = listener.accept().await {
+            tokio::spawn(async move {
+                let mut buf = [0u8; 1024];
+                let _ = stream.read(&mut buf).await;
+                let payload_len = 1024 * 1024; // 1 MB
+                let header = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: application/octet-stream\r\nConnection: keep-alive\r\n\r\n",
+                    payload_len
+                );
+                let _ = stream.write_all(header.as_bytes()).await;
+                // Write 1MB of 'A'
+                let chunk = vec![b'A'; 64 * 1024];
+                for _ in 0..16 {
+                    let _ = stream.write_all(&chunk).await;
+                }
+            });
+        }
+    });
+
+    let upstream = Arc::new(Upstream::new(&format!("http://{}", addr)));
+    let handler = ReverseProxyHandler::new(vec![upstream], Box::new(First), HeaderMutator::new());
+
+    let mut ctx = Context::new(
+        Method::GET,
+        "/large-file".parse().unwrap(),
+        HeaderMap::new(),
+        Bytes::new(),
+    );
+
+    handler.handle(&mut ctx).await.unwrap();
+
+    assert_eq!(ctx.status, Some(StatusCode::OK));
+    // Connection header should have been stripped
+    assert!(!ctx.response_headers.contains_key("connection"));
+    // Since > 64KB, response_stream should be Some and response_body should be None
+    assert!(ctx.response_body.is_none());
+    assert!(ctx.response_stream.is_some());
+
+    // Consume stream and verify full length
+    let mut stream = ctx.response_stream.take().unwrap();
+    let mut total_bytes = 0;
+    while let Some(chunk_res) = stream.next().await {
+        let chunk = chunk_res.unwrap();
+        total_bytes += chunk.len();
+    }
+    assert_eq!(total_bytes, 1024 * 1024);
+}

@@ -136,7 +136,7 @@ impl Handler for ReverseProxyHandler {
                 .await;
 
             match result {
-                Ok((status, mut resp_headers, body_bytes)) => {
+                Ok((status, mut resp_headers, body)) => {
                     // Check if status is considered unhealthy
                     if self
                         .passive_health
@@ -160,13 +160,28 @@ impl Handler for ReverseProxyHandler {
                         upstream.record_success();
                     }
 
-                    // 5. Mutate response headers (header_down)
+                    // 5. Strip hop-by-hop headers (Connection, Keep-Alive, Transfer-Encoding, etc.)
+                    crate::headers::strip_hop_by_hop_headers(
+                        &mut resp_headers,
+                        status == StatusCode::SWITCHING_PROTOCOLS,
+                    );
+
+                    // 6. Mutate response headers (header_down)
                     self.mutator.apply_header_down(&mut resp_headers, ctx);
 
-                    // 6. Write final response to context
+                    // 7. Write final response to context
                     ctx.status = Some(status);
                     ctx.response_headers = resp_headers;
-                    ctx.response_body = Some(body_bytes);
+                    match body {
+                        crate::transport::UpstreamResponseBody::Bytes(bytes) => {
+                            ctx.response_body = Some(bytes);
+                            ctx.response_stream = None;
+                        }
+                        crate::transport::UpstreamResponseBody::Stream(stream) => {
+                            ctx.response_body = None;
+                            ctx.response_stream = Some(stream);
+                        }
+                    }
                     ctx.response_written = true;
                     return Ok(());
                 }

@@ -19,6 +19,12 @@ pub struct UpstreamTarget {
     pub host_header: String,
 }
 
+/// Response body returned by an upstream: either buffered bytes or a streaming body.
+pub enum UpstreamResponseBody {
+    Bytes(Bytes),
+    Stream(raddy_core::context::BoxBodyStream),
+}
+
 /// Parses an upstream address string, stripping http:// and https:// schemes and extracting host and port.
 pub fn parse_upstream_target(addr: &str, default_tls: bool) -> UpstreamTarget {
     let s = addr.trim();
@@ -273,7 +279,7 @@ impl HttpTransport {
         uri: &Uri,
         headers: HeaderMap,
         body: Bytes,
-    ) -> Result<(StatusCode, HeaderMap, Bytes)> {
+    ) -> Result<(StatusCode, HeaderMap, UpstreamResponseBody)> {
         self.round_trip_with_tls(dial_addr, self.tls, method, uri, headers, body)
             .await
     }
@@ -287,7 +293,7 @@ impl HttpTransport {
         uri: &Uri,
         headers: HeaderMap,
         body: Bytes,
-    ) -> Result<(StatusCode, HeaderMap, Bytes)> {
+    ) -> Result<(StatusCode, HeaderMap, UpstreamResponseBody)> {
         // 1. Resolve host and port from dial string
         let target = parse_upstream_target(dial_addr, force_tls);
 
@@ -391,19 +397,53 @@ impl HttpTransport {
                     upstream: target.dial_addr.clone(),
                     message: format!("Failed sending request: {}", e),
                 })?;
-
         let (parts, incoming_body) = resp.into_parts();
 
-        // 7. Read response body
-        let body_bytes = incoming_body
-            .collect()
-            .await
-            .map_err(|e| ProxyError::Transport {
-                upstream: target.dial_addr.clone(),
-                message: format!("Error reading response body: {}", e),
-            })?
-            .to_bytes();
+        // 7. Decide whether to buffer or stream the response body.
+        // If Content-Length is present and <= 64KB, buffer into memory.
+        // Otherwise (streaming, chunked, or large file > 64KB), stream it.
+        let content_len = parts
+            .headers
+            .get(http::header::CONTENT_LENGTH)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| s.parse::<usize>().ok());
 
-        Ok((parts.status, parts.headers, body_bytes))
+        const MAX_BUFFER_BYTES: usize = 64 * 1024;
+
+        let body = match content_len {
+            Some(len) if len <= MAX_BUFFER_BYTES => {
+                let body_bytes = incoming_body
+                    .collect()
+                    .await
+                    .map_err(|e| ProxyError::Transport {
+                        upstream: target.dial_addr.clone(),
+                        message: format!("Error reading response body: {}", e),
+                    })?
+                    .to_bytes();
+                UpstreamResponseBody::Bytes(body_bytes)
+            }
+            _ => UpstreamResponseBody::Stream(incoming_to_stream(incoming_body)),
+        };
+
+        Ok((parts.status, parts.headers, body))
     }
+}
+
+pub fn incoming_to_stream(incoming: hyper::body::Incoming) -> raddy_core::context::BoxBodyStream {
+    use futures_util::StreamExt;
+    use http_body_util::BodyStream;
+
+    let stream = BodyStream::new(incoming).filter_map(|res| async move {
+        match res {
+            Ok(frame) => {
+                if frame.is_data() {
+                    frame.into_data().ok().map(Ok)
+                } else {
+                    None
+                }
+            }
+            Err(e) => Some(Err(std::io::Error::new(std::io::ErrorKind::Other, e))),
+        }
+    });
+    Box::pin(stream)
 }

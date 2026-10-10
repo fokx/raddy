@@ -32,45 +32,53 @@ impl Handler for FileServerHandler {
         let root_path = PathBuf::from(root_str);
         let req_path = ctx.uri.path().to_string();
 
-        // Check hidden files/directories
-        for seg in req_path.split('/') {
-            if !seg.is_empty() && self.hide.iter().any(|h| h == seg) {
+        // 1. Decode percent-encoded URI path (e.g. %20 -> space)
+        let decoded_path = percent_encoding::percent_decode_str(&req_path)
+            .decode_utf8_lossy()
+            .to_string();
+
+        // 2. Sanitize path segments to prevent directory traversal
+        let mut sanitized_segments: Vec<String> = Vec::new();
+        for seg in decoded_path.split('/') {
+            if seg.is_empty() || seg == "." {
+                continue;
+            }
+            if seg == ".." {
+                if sanitized_segments.pop().is_none() {
+                    // Attempted to traverse above root
+                    ctx.set_response(StatusCode::NOT_FOUND, "404 Not Found\n");
+                    return Ok(());
+                }
+            } else {
+                sanitized_segments.push(seg.to_string());
+            }
+        }
+
+        // 3. Check hidden files/directories against all segments
+        for seg in &sanitized_segments {
+            if self.hide.iter().any(|h| h == seg) {
                 ctx.set_response(StatusCode::NOT_FOUND, "404 Not Found\n");
                 return Ok(());
             }
         }
 
-        // Strip leading slash to join relative to root
-        let clean_path = req_path.trim_start_matches('/');
-        let target_path = root_path.join(clean_path);
+        // 4. Construct target path relative to root
+        let mut target_path = root_path.clone();
+        for seg in &sanitized_segments {
+            target_path.push(seg);
+        }
 
-        // Security check: ensure path does not escape root (directory traversal)
-        let canonical_root = match root_path.canonicalize() {
-            Ok(p) => p,
-            Err(_) => {
-                ctx.set_response(
-                    StatusCode::NOT_FOUND,
-                    "404 Not Found: Root directory not accessible\n",
-                );
-                return Ok(());
-            }
-        };
-
-        let canonical_target = match target_path.canonicalize() {
-            Ok(p) => p,
+        // 5. Query file metadata (this follows symlinks!)
+        let metadata = match tokio::fs::metadata(&target_path).await {
+            Ok(m) => m,
             Err(_) => {
                 ctx.set_response(StatusCode::NOT_FOUND, "404 Not Found\n");
                 return Ok(());
             }
         };
 
-        if !canonical_target.starts_with(&canonical_root) {
-            ctx.set_response(StatusCode::FORBIDDEN, "403 Forbidden: Access denied\n");
-            return Ok(());
-        }
-
-        // If directory, check for index.html or directory browse
-        if canonical_target.is_dir() {
+        // 6. If directory, check for index.html or directory browse
+        if metadata.is_dir() {
             // Enforce trailing slash on directory URLs so relative links in directory listings resolve correctly
             let orig_path = ctx.orig_uri.path();
             if !orig_path.ends_with('/') {
@@ -88,13 +96,17 @@ impl Handler for FileServerHandler {
                 return Ok(());
             }
 
-            let index_file = canonical_target.join("index.html");
-            if index_file.is_file() {
+            let index_file = target_path.join("index.html");
+            if tokio::fs::metadata(&index_file)
+                .await
+                .map(|m| m.is_file())
+                .unwrap_or(false)
+            {
                 return serve_file(&index_file, ctx).await;
             }
 
             if self.browse {
-                return render_directory_listing(&canonical_target, &req_path, &self.hide, ctx)
+                return render_directory_listing(&target_path, &decoded_path, &self.hide, ctx)
                     .await;
             } else {
                 ctx.set_response(
@@ -105,8 +117,8 @@ impl Handler for FileServerHandler {
             }
         }
 
-        if canonical_target.is_file() {
-            return serve_file(&canonical_target, ctx).await;
+        if metadata.is_file() {
+            return serve_file(&target_path, ctx).await;
         }
 
         ctx.set_response(StatusCode::NOT_FOUND, "404 Not Found\n");
@@ -380,11 +392,7 @@ async fn render_directory_listing(
         if hide.iter().any(|h| h == &name) {
             continue;
         }
-        let is_dir = entry
-            .file_type()
-            .await
-            .map(|ft| ft.is_dir())
-            .unwrap_or(false);
+        let is_dir = entry.metadata().await.map(|m| m.is_dir()).unwrap_or(false);
         items.push((name, is_dir));
     }
 
@@ -408,9 +416,22 @@ async fn render_directory_listing(
         html.push_str("<li><a href=\"..\">&larr; Parent Directory</a></li>");
     }
 
+    const PATH_ENCODE_SET: &percent_encoding::AsciiSet = &percent_encoding::CONTROLS
+        .add(b' ')
+        .add(b'"')
+        .add(b'#')
+        .add(b'<')
+        .add(b'>')
+        .add(b'?')
+        .add(b'`')
+        .add(b'{')
+        .add(b'}');
+
     for (name, is_dir) in items {
         let slash = if is_dir { "/" } else { "" };
-        let link = format!("./{}{}", name, slash);
+        let encoded_name =
+            percent_encoding::utf8_percent_encode(&name, PATH_ENCODE_SET).to_string();
+        let link = format!("./{}{}", encoded_name, slash);
         html.push_str(&format!(
             "<li><a href=\"{}\">{}{}</a></li>",
             link, name, slash

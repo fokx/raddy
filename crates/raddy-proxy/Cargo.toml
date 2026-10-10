@@ -33,6 +33,7 @@ rustls-native-certs = "0.8"
 subtle = "2"
 url = "2"
 webpki-roots = "0.26"
+futures-util = "0.3"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }

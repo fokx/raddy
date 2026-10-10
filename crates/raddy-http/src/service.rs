@@ -108,6 +108,16 @@ pub async fn handle_request(
     let mut resp_builder = Response::builder().status(status);
 
     for (k, v) in &ctx.response_headers {
+        // Strip hop-by-hop / connection-specific headers that violate HTTP/2 and HTTP/3 specs
+        let name_str = k.as_str();
+        if name_str.eq_ignore_ascii_case("connection")
+            || name_str.eq_ignore_ascii_case("keep-alive")
+            || name_str.eq_ignore_ascii_case("proxy-connection")
+            || name_str.eq_ignore_ascii_case("transfer-encoding")
+            || name_str.eq_ignore_ascii_case("upgrade")
+        {
+            continue;
+        }
         resp_builder = resp_builder.header(k, v);
     }
 
