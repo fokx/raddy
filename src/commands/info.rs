@@ -69,6 +69,10 @@ pub fn list_modules(as_json: bool) {
             "Enforce maximum incoming HTTP request body size",
         ),
         (
+            "http.handlers.rate_limit",
+            "Sliding window HTTP rate limiting with zones, keys, and retry headers",
+        ),
+        (
             "http.handlers.headers",
             "Manipulate request and response HTTP headers",
         ),

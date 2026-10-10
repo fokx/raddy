@@ -47,6 +47,9 @@ tokio-util = { version = "0.7", features = ["io"] }
 futures-util = "0.3"
 httpdate = "1.0"
 percent-encoding = "2.3"
+fastrand = "2"
+ipnet = "2"
+inventory = "0.3"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }

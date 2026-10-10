@@ -20,8 +20,16 @@ HTTP request processing in Raddy uses a decoupled pipeline of pre-processors, ha
 - **`basic_auth`**: RFC 7617 HTTP Basic Authentication verified against secure `bcrypt` password hashes.
 - **`forward_auth`**: Delegates authorization decisions to external authentication services (Authelia, Authentik, etc.), copying upstream headers upon successful authentication.
 
-### `request_body` (Payload Limits)
-- Enforces strict maximum request body sizes (`max_size`) to protect backends against denial-of-service (DoS) attacks.
+### `request_body` & `rate_limit` (Traffic & Payload Limits)
+- **`request_body`**: Enforces strict maximum request body sizes (`max_size`) to protect backends against denial-of-service (DoS) attacks.
+- **`rate_limit`** (`github.com/mholt/caddy-ratelimit` drop-in parity):
+  - Sliding window rate limiting implemented with scalable ring buffers.
+  - Multi-zone configurations with static keys or dynamic placeholders (`{remote_host}`, `{http.request.uri}`, etc.).
+  - Automatic `Retry-After` header emission and `429 Too Many Requests` responses.
+  - Subnet aggregation using `ipv4_prefix` and `ipv6_prefix` CIDR masking.
+  - Zone request matchers (`match { method ... path ... }`).
+  - Rate limit state persistence across hot reloads.
+  - Optional jitter, background expired bucket sweep, and placeholder `{http.rate_limit.exceeded.name}`.
 
 ### `map` (Variable Mapping)
 - Maps input placeholders against lookup tables or regular expressions to populate custom context variables.

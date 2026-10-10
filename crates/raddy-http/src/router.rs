@@ -784,6 +784,11 @@ fn compile_handler(h_cfg: &HandlerConfig, registry: &ModuleRegistry) -> Result<A
             Ok(Arc::new(LogNameHandler { name }))
         }
 
+        "rate_limit" | "http.handlers.rate_limit" => {
+            let rl_handler = crate::ratelimit::RateLimitHandler::from_config(&h_cfg.details)?;
+            Ok(Arc::new(rl_handler))
+        }
+
         other => {
             // Attempt to resolve through dynamic module registry
             registry.create_handler(other, serde_json::to_value(&h_cfg.details)?)

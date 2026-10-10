@@ -29,6 +29,7 @@ pub const DIRECTIVE_ORDER: &[&str] = &[
     "rewrite",
     "uri",
     "try_files",
+    "rate_limit",
     "basicauth",
     "basic_auth",
     "forward_auth",
@@ -1595,6 +1596,204 @@ impl Adapter {
                 let cfg = HandlerConfig::new("error")
                     .with_field("error", message)
                     .with_field("status_code", code);
+                configs.push(cfg);
+            }
+
+            "rate_limit" => {
+                let mut zones_map: HashMap<String, serde_json::Value> = HashMap::new();
+                let mut jitter: Option<f64> = None;
+                let mut sweep_interval: Option<String> = None;
+                let mut log_key = false;
+                let mut disable_metrics = false;
+                let mut distributed: Option<serde_json::Value> = None;
+                let mut storage: Option<serde_json::Value> = None;
+
+                let mut default_zone_key = String::new();
+                let mut default_zone_window = String::new();
+                let mut default_zone_events: Option<usize> = None;
+                let mut default_zone_ipv4 = 0;
+                let mut default_zone_ipv6 = 0;
+                let mut default_zone_match = Vec::new();
+
+                if let Some(ref block) = dir.block {
+                    let mut zone_idx = 0;
+                    for sub in block {
+                        match sub.name.as_str() {
+                            "zone" => {
+                                let zone_name = sub.args.first().cloned().unwrap_or_else(|| {
+                                    zone_idx += 1;
+                                    format!("zone_{}", zone_idx)
+                                });
+                                let mut z_key = String::new();
+                                let mut z_window = String::new();
+                                let mut z_events: Option<usize> = None;
+                                let mut z_ipv4 = 0;
+                                let mut z_ipv6 = 0;
+                                let mut z_match: Vec<MatcherSet> = Vec::new();
+
+                                if let Some(ref zblock) = sub.block {
+                                    for zsub in zblock {
+                                        match zsub.name.as_str() {
+                                            "key" => {
+                                                z_key = zsub.args.join(" ");
+                                            }
+                                            "window" => {
+                                                if let Some(w) = zsub.args.first() {
+                                                    z_window = w.clone();
+                                                }
+                                            }
+                                            "events" | "max_events" => {
+                                                if let Some(e) = zsub.args.first().and_then(|s| s.parse::<usize>().ok()) {
+                                                    z_events = Some(e);
+                                                }
+                                            }
+                                            "ipv4_prefix" => {
+                                                if let Some(p) = zsub.args.first().and_then(|s| s.parse::<usize>().ok()) {
+                                                    z_ipv4 = p;
+                                                }
+                                            }
+                                            "ipv6_prefix" => {
+                                                if let Some(p) = zsub.args.first().and_then(|s| s.parse::<usize>().ok()) {
+                                                    z_ipv6 = p;
+                                                }
+                                            }
+                                            "match" => {
+                                                let matcher_set = parse_named_matcher_block(zsub)?;
+                                                z_match.push(matcher_set);
+                                            }
+                                            _ => {}
+                                        }
+                                    }
+                                }
+
+                                let mut z_obj = serde_json::json!({
+                                    "key": z_key,
+                                    "window": z_window,
+                                    "max_events": z_events.unwrap_or(0),
+                                });
+                                if z_ipv4 > 0 {
+                                    z_obj["ipv4_prefix"] = serde_json::json!(z_ipv4);
+                                }
+                                if z_ipv6 > 0 {
+                                    z_obj["ipv6_prefix"] = serde_json::json!(z_ipv6);
+                                }
+                                if !z_match.is_empty() {
+                                    z_obj["match"] = serde_json::to_value(&z_match).unwrap_or_default();
+                                }
+                                zones_map.insert(zone_name, z_obj);
+                            }
+                            "jitter" => {
+                                jitter = sub.args.first().and_then(|s| s.parse::<f64>().ok());
+                            }
+                            "sweep_interval" => {
+                                sweep_interval = sub.args.first().cloned();
+                            }
+                            "log_key" => {
+                                log_key = true;
+                            }
+                            "disable_metrics" => {
+                                disable_metrics = true;
+                            }
+                            "distributed" => {
+                                let mut dist_map = serde_json::Map::new();
+                                if let Some(ref dblock) = sub.block {
+                                    for dsub in dblock {
+                                        if let Some(v) = dsub.args.first() {
+                                            dist_map.insert(dsub.name.clone(), serde_json::Value::String(v.clone()));
+                                        }
+                                    }
+                                }
+                                distributed = Some(serde_json::Value::Object(dist_map));
+                            }
+                            "storage" => {
+                                storage = sub.args.first().map(|s| serde_json::json!({ "module": s }));
+                            }
+                            "key" => {
+                                default_zone_key = sub.args.join(" ");
+                            }
+                            "window" => {
+                                if let Some(w) = sub.args.first() {
+                                    default_zone_window = w.clone();
+                                }
+                            }
+                            "events" | "max_events" => {
+                                if let Some(e) = sub.args.first().and_then(|s| s.parse::<usize>().ok()) {
+                                    default_zone_events = Some(e);
+                                }
+                            }
+                            "ipv4_prefix" => {
+                                if let Some(p) = sub.args.first().and_then(|s| s.parse::<usize>().ok()) {
+                                    default_zone_ipv4 = p;
+                                }
+                            }
+                            "ipv6_prefix" => {
+                                if let Some(p) = sub.args.first().and_then(|s| s.parse::<usize>().ok()) {
+                                    default_zone_ipv6 = p;
+                                }
+                            }
+                            "match" => {
+                                let matcher_set = parse_named_matcher_block(sub)?;
+                                default_zone_match.push(matcher_set);
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+
+                if zones_map.is_empty() && (!default_zone_window.is_empty() || default_zone_events.is_some()) {
+                    let mut z_obj = serde_json::json!({
+                        "key": default_zone_key,
+                        "window": default_zone_window,
+                        "max_events": default_zone_events.unwrap_or(0),
+                    });
+                    if default_zone_ipv4 > 0 {
+                        z_obj["ipv4_prefix"] = serde_json::json!(default_zone_ipv4);
+                    }
+                    if default_zone_ipv6 > 0 {
+                        z_obj["ipv6_prefix"] = serde_json::json!(default_zone_ipv6);
+                    }
+                    if !default_zone_match.is_empty() {
+                        z_obj["match"] = serde_json::to_value(&default_zone_match).unwrap_or_default();
+                    }
+                    zones_map.insert("default".to_string(), z_obj);
+                }
+
+                if zones_map.is_empty() && !dir.args.is_empty() {
+                    let (key, window, events) = if dir.args.len() >= 3 {
+                        (dir.args[0].clone(), dir.args[1].clone(), dir.args[2].parse::<usize>().unwrap_or(0))
+                    } else if dir.args.len() == 2 {
+                        (String::new(), dir.args[0].clone(), dir.args[1].parse::<usize>().unwrap_or(0))
+                    } else {
+                        (String::new(), dir.args[0].clone(), 0)
+                    };
+                    zones_map.insert("default".to_string(), serde_json::json!({
+                        "key": key,
+                        "window": window,
+                        "max_events": events,
+                    }));
+                }
+
+                let mut cfg = HandlerConfig::new("rate_limit")
+                    .with_field("rate_limits", zones_map);
+                if let Some(j) = jitter {
+                    cfg = cfg.with_field("jitter", j);
+                }
+                if let Some(s) = sweep_interval {
+                    cfg = cfg.with_field("sweep_interval", s);
+                }
+                if log_key {
+                    cfg = cfg.with_field("log_key", true);
+                }
+                if disable_metrics {
+                    cfg = cfg.with_field("disable_metrics", true);
+                }
+                if let Some(dist) = distributed {
+                    cfg = cfg.with_field("distributed", dist);
+                }
+                if let Some(stor) = storage {
+                    cfg = cfg.with_field("storage", stor);
+                }
+
                 configs.push(cfg);
             }
 

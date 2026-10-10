@@ -12,6 +12,7 @@ pub mod http3;
 pub mod limits;
 pub mod logging;
 pub mod map;
+pub mod ratelimit;
 pub mod replace;
 pub mod router;
 pub mod server;
@@ -21,6 +22,7 @@ pub mod templates;
 pub use error::{HttpServerError, Result};
 pub use fileserver::FileServerHandler;
 pub use logging::LogPipeline;
+pub use ratelimit::{RateLimitHandler, apply_network_prefix};
 pub use replace::ReplaceHandler;
 pub use router::{
     CompiledRoute, Router, SubrouteHandler, VirtualHostRouter, compile_virtual_host_router,
