@@ -4,7 +4,7 @@ use raddy_admin::{AdminServer, AppState as AdminAppState};
 use raddy_caddyfile::adapt_caddyfile;
 use raddy_core::config::Config;
 use raddy_core::module::ModuleRegistry;
-use raddy_tls::{ChallengeTypePreference, TlsManager};
+use raddy_tls::{ChallengeTypePreference, CloudflareDnsProvider, TlsManager};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -94,7 +94,7 @@ async fn run_server_loop(
         .unwrap_or(false);
 
     tracing::info!("Raddy server initializing...");
-    let (email, mut ca_url, mut staging, challenge_pref) =
+    let (email, mut ca_url, mut staging, mut challenge_pref, dns_cfg_opt) =
         if let Some(tls) = initial_config.tls_app() {
             let is_staging = tls.staging.unwrap_or(false)
                 || tls
@@ -102,17 +102,27 @@ async fn run_server_loop(
                     .as_deref()
                     .map(|ca| ca.contains("staging"))
                     .unwrap_or(false);
+            let dns_cfg = tls.get_dns_provider();
             let pref = if tls.disable_http_challenge == Some(true) {
                 ChallengeTypePreference::TlsAlpnOnly
             } else if tls.disable_tls_alpn_challenge == Some(true) {
                 ChallengeTypePreference::Http01Only
             } else if let Some(ref chs) = tls.challenges {
+                let has_dns = chs.iter().any(|c| c == "dns-01" || c == "dns");
                 let has_alpn = chs.iter().any(|c| c == "tls-alpn-01" || c == "tls-alpn");
                 let has_http = chs.iter().any(|c| c == "http-01" || c == "http");
-                if has_alpn && !has_http {
+                if has_dns && !has_http && !has_alpn {
+                    ChallengeTypePreference::Dns01Only
+                } else if has_alpn && !has_http && !has_dns {
                     ChallengeTypePreference::TlsAlpnOnly
-                } else if has_http && !has_alpn {
+                } else if has_http && !has_alpn && !has_dns {
                     ChallengeTypePreference::Http01Only
+                } else if chs
+                    .first()
+                    .map(|c| c == "dns-01" || c == "dns")
+                    .unwrap_or(false)
+                {
+                    ChallengeTypePreference::Dns01First
                 } else if chs
                     .first()
                     .map(|c| c == "http-01" || c == "http")
@@ -122,10 +132,12 @@ async fn run_server_loop(
                 } else {
                     ChallengeTypePreference::TlsAlpnFirst
                 }
+            } else if dns_cfg.is_some() {
+                ChallengeTypePreference::Dns01Only
             } else {
                 ChallengeTypePreference::TlsAlpnFirst
             };
-            (tls.email, tls.acme_ca, is_staging, pref)
+            (tls.email, tls.acme_ca, is_staging, pref, dns_cfg)
         } else {
             let is_staging = std::env::var("RADDY_ACME_STAGING")
                 .or_else(|_| std::env::var("RADDY_ACME_DEV"))
@@ -136,8 +148,35 @@ async fn run_server_loop(
                 std::env::var("RADDY_ACME_CA").ok(),
                 is_staging,
                 ChallengeTypePreference::TlsAlpnFirst,
+                None,
             )
         };
+
+    let site_dns_cfg = initial_config.http_app().and_then(|app| {
+        app.servers.values().find_map(|srv| {
+            srv.tls_connection_policies
+                .as_ref()
+                .and_then(|pols| pols.iter().find_map(|p| p.dns_provider.clone()))
+        })
+    });
+    let active_dns_cfg = dns_cfg_opt.or(site_dns_cfg).or_else(|| {
+        if std::env::var("CLOUDFLARE_API_TOKEN").is_ok() || std::env::var("CF_API_TOKEN").is_ok() {
+            Some(raddy_core::config::DnsProviderConfig {
+                name: "cloudflare".to_string(),
+                api_token: None,
+                zone_token: None,
+                propagation_delay_secs: None,
+                resolvers: None,
+                extra: std::collections::HashMap::new(),
+            })
+        } else {
+            None
+        }
+    });
+
+    if active_dns_cfg.is_some() && challenge_pref == ChallengeTypePreference::TlsAlpnFirst {
+        challenge_pref = ChallengeTypePreference::Dns01First;
+    }
 
     if cli_staging {
         staging = true;
@@ -174,6 +213,25 @@ async fn run_server_loop(
         TlsManager::new(email, staging)?
     };
     tls_mgr = tls_mgr.with_challenge_preference(challenge_pref);
+
+    if let Some(ref dns_cfg) = active_dns_cfg {
+        if dns_cfg.name == "cloudflare" || dns_cfg.name == "dns.providers.cloudflare" {
+            let token = dns_cfg.api_token.as_deref().unwrap_or("");
+            let mut provider = CloudflareDnsProvider::new(token)?;
+            if let Some(ref zt) = dns_cfg.zone_token {
+                provider = provider.with_zone_token(zt);
+            }
+            if let Some(delay_secs) = dns_cfg.propagation_delay_secs {
+                provider = provider.with_propagation_delay(Duration::from_secs(delay_secs));
+            }
+            if let Some(ref res) = dns_cfg.resolvers {
+                provider = provider.with_resolvers(res.clone());
+            }
+            tracing::info!("Registered Cloudflare DNS-01 challenge provider plugin (caddy-dns/cloudflare)");
+            tls_mgr = tls_mgr.with_dns_provider(Arc::new(provider));
+        }
+    }
+
     let tls_manager = Arc::new(tls_mgr);
     let state = Arc::new(AdminAppState::new(
         initial_config.clone(),

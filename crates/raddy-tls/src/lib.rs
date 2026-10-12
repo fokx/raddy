@@ -4,6 +4,7 @@
 //! dynamic SNI certificate resolution (rustls), and TLS acceptor generation.
 
 pub mod acme;
+pub mod cloudflare;
 pub mod error;
 pub mod local_ca;
 pub mod manager;
@@ -12,9 +13,10 @@ pub mod sni;
 pub mod storage;
 
 pub use acme::{
-    AcmeClient, ChallengeTypePreference, Http01ChallengeStore, LETS_ENCRYPT_PRODUCTION,
-    LETS_ENCRYPT_STAGING,
+    AcmeClient, ChallengeTypePreference, Dns01Provider, Http01ChallengeStore,
+    LETS_ENCRYPT_PRODUCTION, LETS_ENCRYPT_STAGING,
 };
+pub use cloudflare::{CloudflareDnsProvider, is_valid_cloudflare_token, resolve_cloudflare_token};
 pub use error::{Result, TlsError};
 pub use local_ca::LocalCa;
 pub use manager::{TlsManager, is_local_or_private};

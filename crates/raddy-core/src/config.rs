@@ -313,6 +313,9 @@ pub struct TlsConnectionPolicy {
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub protocol_max: Option<String>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dns_provider: Option<DnsProviderConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
@@ -352,6 +355,32 @@ pub struct AutoHttpsConfig {
     pub skip_certificates: Option<Vec<String>>,
 }
 
+/// Configuration for DNS-01 ACME challenge provider plugins (e.g. Cloudflare).
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct DnsProviderConfig {
+    /// Provider name (e.g. "cloudflare" or "dns.providers.cloudflare")
+    pub name: String,
+
+    /// Cloudflare API token
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub api_token: Option<String>,
+
+    /// Cloudflare Zone token (optional)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub zone_token: Option<String>,
+
+    /// Propagation delay in seconds
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub propagation_delay_secs: Option<u64>,
+
+    /// Optional resolvers (e.g. ["1.1.1.1:53"])
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resolvers: Option<Vec<String>>,
+
+    #[serde(flatten, default, skip_serializing_if = "HashMap::is_empty")]
+    pub extra: HashMap<String, serde_json::Value>,
+}
+
 /// Global TLS application configuration.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 pub struct TlsApp {
@@ -373,9 +402,59 @@ pub struct TlsApp {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub disable_tls_alpn_challenge: Option<bool>,
 
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dns_provider: Option<DnsProviderConfig>,
+
     #[serde(flatten, default, skip_serializing_if = "HashMap::is_empty")]
     pub extra: HashMap<String, serde_json::Value>,
 }
+
+impl TlsApp {
+    /// Extracts DNS provider configuration from standard field or Caddy JSON structure
+    pub fn get_dns_provider(&self) -> Option<DnsProviderConfig> {
+        if let Some(ref p) = self.dns_provider {
+            return Some(p.clone());
+        }
+
+        // Check extra for "dns_provider" or "dns"
+        if let Some(v) = self.extra.get("dns_provider").or_else(|| self.extra.get("dns")) {
+            if let Ok(cfg) = serde_json::from_value::<DnsProviderConfig>(v.clone()) {
+                return Some(cfg);
+            }
+        }
+
+        // Check Caddy JSON format: challenges.dns.provider
+        if let Some(v) = self.extra.get("challenges") {
+            if let Some(dns_obj) = v.get("dns") {
+                if let Some(prov_obj) = dns_obj.get("provider") {
+                    if let Ok(cfg) = serde_json::from_value::<DnsProviderConfig>(prov_obj.clone()) {
+                        return Some(cfg);
+                    }
+                }
+            }
+        }
+
+        // Check Caddy automation policies format: automation.policies[].challenges.dns.provider
+        if let Some(v) = self.extra.get("automation") {
+            if let Some(policies) = v.get("policies").and_then(|p| p.as_array()) {
+                for pol in policies {
+                    if let Some(prov_obj) = pol
+                        .get("challenges")
+                        .and_then(|c| c.get("dns"))
+                        .and_then(|d| d.get("provider"))
+                    {
+                        if let Ok(cfg) = serde_json::from_value::<DnsProviderConfig>(prov_obj.clone()) {
+                            return Some(cfg);
+                        }
+                    }
+                }
+            }
+        }
+
+        None
+    }
+}
+
 
 pub const LETS_ENCRYPT_PRODUCTION: &str = "https://acme-v02.api.letsencrypt.org/directory";
 pub const LETS_ENCRYPT_STAGING: &str = "https://acme-staging-v02.api.letsencrypt.org/directory";

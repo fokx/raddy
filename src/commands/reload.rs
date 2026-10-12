@@ -12,9 +12,6 @@ pub async fn reload_command(
         bail!("Configuration file not found: {}", config.display());
     }
 
-    let content = std::fs::read_to_string(config)
-        .with_context(|| format!("Failed to read '{}'", config.display()))?;
-
     let is_json = match adapter {
         Some("json") => true,
         Some("caddyfile") => false,

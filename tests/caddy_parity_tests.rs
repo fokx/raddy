@@ -440,6 +440,71 @@ async fn test_caddyfile_site_level_tls_challenges() {
 }
 
 #[tokio::test]
+async fn test_caddyfile_cloudflare_dns_challenge_adaptation() {
+    // 1. Test global acme_dns cloudflare directive
+    let global_cf = r#"
+    {
+        acme_dns cloudflare "cfut_global_token_123456789012345678"
+    }
+    example.com {
+        respond "global dns ok" 200
+    }
+    "#;
+
+    let config = adapt_caddyfile(global_cf, Path::new(".")).unwrap();
+    let tls = config.tls_app().unwrap();
+    let dns_provider = tls.get_dns_provider().expect("Expected global dns provider");
+    assert_eq!(dns_provider.name, "cloudflare");
+    assert_eq!(
+        dns_provider.api_token.as_deref(),
+        Some("cfut_global_token_123456789012345678")
+    );
+    assert_eq!(
+        tls.challenges.as_ref().unwrap(),
+        &vec!["dns-01".to_string()]
+    );
+
+    // 2. Test site-level tls with dns cloudflare block (for wildcards)
+    let site_cf = r#"
+    *.sub.example.com {
+        tls {
+            dns cloudflare {
+                api_token "cfat_site_token_123456789012345678"
+                zone_token "zone_read_token_456"
+                resolvers 1.1.1.1 1.0.0.1
+                propagation_delay 10s
+            }
+        }
+        respond "wildcard site ok" 200
+    }
+    "#;
+
+    let config = adapt_caddyfile(site_cf, Path::new(".")).unwrap();
+    let http = config.http_app().unwrap();
+    let srv = http
+        .servers
+        .values()
+        .find(|s| s.tls_connection_policies.is_some())
+        .expect("Expected server with TLS policies");
+    let pols = srv.tls_connection_policies.as_ref().unwrap();
+    let site_dns = pols[0].dns_provider.as_ref().expect("Expected site-level dns provider");
+    assert_eq!(site_dns.name, "cloudflare");
+    assert_eq!(
+        site_dns.api_token.as_deref(),
+        Some("cfat_site_token_123456789012345678")
+    );
+    assert_eq!(
+        site_dns.zone_token.as_deref(),
+        Some("zone_read_token_456")
+    );
+    assert_eq!(
+        site_dns.resolvers.as_deref(),
+        Some(&vec!["1.1.1.1".to_string(), "1.0.0.1".to_string()][..])
+    );
+    assert_eq!(site_dns.propagation_delay_secs, Some(10));
+}
+
+#[tokio::test]
 async fn test_user_caddyfile_adaptation_and_compilation() {
     let caddyfile = r#"
 {

@@ -1,6 +1,6 @@
 use crate::acme::{
-    AcmeClient, ChallengeTypePreference, Http01ChallengeStore, LETS_ENCRYPT_PRODUCTION,
-    LETS_ENCRYPT_STAGING,
+    AcmeClient, ChallengeTypePreference, Dns01Provider, Http01ChallengeStore,
+    LETS_ENCRYPT_PRODUCTION, LETS_ENCRYPT_STAGING,
 };
 use crate::error::Result;
 use crate::local_ca::LocalCa;
@@ -57,23 +57,35 @@ impl TlsManager {
         self
     }
 
+    pub fn with_dns_provider(mut self, provider: Arc<dyn Dns01Provider>) -> Self {
+        self.acme = Arc::new((*self.acme).clone().with_dns_provider(provider));
+        self
+    }
+
+    pub fn dns_provider(&self) -> Option<Arc<dyn Dns01Provider>> {
+        self.acme.dns_provider()
+    }
+
     pub fn challenge_preference(&self) -> ChallengeTypePreference {
         self.acme.challenge_preference()
     }
 
     pub fn with_storage(mut self, storage: Arc<dyn CertStorage>) -> Self {
         let pref = self.acme.challenge_preference();
+        let dns = self.acme.dns_provider();
         self.storage = storage.clone();
-        self.acme = Arc::new(
-            AcmeClient::new(
-                self.acme.directory_url().to_string(),
-                self.acme.email().map(|s| s.to_string()),
-                self.acme.challenge_store().clone(),
-                self.sni_resolver.clone(),
-                storage,
-            )
-            .with_challenge_preference(pref),
-        );
+        let mut acme = AcmeClient::new(
+            self.acme.directory_url().to_string(),
+            self.acme.email().map(|s| s.to_string()),
+            self.acme.challenge_store().clone(),
+            self.sni_resolver.clone(),
+            storage,
+        )
+        .with_challenge_preference(pref);
+        if let Some(d) = dns {
+            acme = acme.with_dns_provider(d);
+        }
+        self.acme = Arc::new(acme);
         self
     }
 

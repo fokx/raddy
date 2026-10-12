@@ -67,6 +67,7 @@ pub struct Adapter {
     challenges: Option<Vec<String>>,
     disable_http_challenge: Option<bool>,
     disable_tls_alpn_challenge: Option<bool>,
+    dns_provider: Option<DnsProviderConfig>,
     log_credentials: Option<bool>,
     custom_order: HashMap<String, usize>,
     site_log_counter: usize,
@@ -115,6 +116,7 @@ impl Adapter {
             challenges: None,
             disable_http_challenge: None,
             disable_tls_alpn_challenge: None,
+            dns_provider: None,
             log_credentials: None,
             custom_order,
             site_log_counter: 0,
@@ -173,14 +175,20 @@ impl Adapter {
             || self.challenges.is_some()
             || self.disable_http_challenge.is_some()
             || self.disable_tls_alpn_challenge.is_some()
+            || self.dns_provider.is_some()
         {
+            let mut chs = self.challenges.clone();
+            if self.dns_provider.is_some() && chs.is_none() {
+                chs = Some(vec!["dns-01".to_string()]);
+            }
             let tls_app = TlsApp {
                 email: self.email.clone(),
                 acme_ca: self.acme_ca.clone(),
                 staging: self.staging,
-                challenges: self.challenges.clone(),
+                challenges: chs,
                 disable_http_challenge: self.disable_http_challenge,
                 disable_tls_alpn_challenge: self.disable_tls_alpn_challenge,
+                dns_provider: self.dns_provider.clone(),
                 extra: HashMap::new(),
             };
             let _ = config.set_tls_app(tls_app);
@@ -276,6 +284,9 @@ impl Adapter {
                 }
                 "disable_tls_alpn_challenge" | "disable_tls_alpn" => {
                     self.disable_tls_alpn_challenge = Some(true);
+                }
+                "acme_dns" | "dns" => {
+                    self.dns_provider = Some(parse_dns_provider_directive(opt)?);
                 }
                 "local_certs" => {
                     self.staging = Some(false);
@@ -2851,6 +2862,15 @@ fn parse_tls_directive(dir: &DirectiveNode) -> ParseResult<TlsConnectionPolicy> 
                     let any_tag = tags.any_tag.get_or_insert_with(Vec::new);
                     any_tag.push("disable_tls_alpn_challenge".to_string());
                 }
+                "dns" | "acme_dns" => {
+                    let dns_cfg = parse_dns_provider_directive(sub)?;
+                    let tags = policy
+                        .certificate_selection
+                        .get_or_insert_with(CertificateSelection::default);
+                    let any_tag = tags.any_tag.get_or_insert_with(Vec::new);
+                    any_tag.push(format!("dns:{}", dns_cfg.name));
+                    policy.dns_provider = Some(dns_cfg);
+                }
                 "issuer" => {
                     if let Some(ref issuer_block) = sub.block {
                         for issuer_sub in issuer_block {
@@ -2887,6 +2907,15 @@ fn parse_tls_directive(dir: &DirectiveNode) -> ParseResult<TlsConnectionPolicy> 
                                     let any_tag = tags.any_tag.get_or_insert_with(Vec::new);
                                     any_tag.push("disable_tls_alpn_challenge".to_string());
                                 }
+                                "dns" | "acme_dns" => {
+                                    let dns_cfg = parse_dns_provider_directive(issuer_sub)?;
+                                    let tags = policy
+                                        .certificate_selection
+                                        .get_or_insert_with(CertificateSelection::default);
+                                    let any_tag = tags.any_tag.get_or_insert_with(Vec::new);
+                                    any_tag.push(format!("dns:{}", dns_cfg.name));
+                                    policy.dns_provider = Some(dns_cfg);
+                                }
                                 _ => {}
                             }
                         }
@@ -2898,6 +2927,59 @@ fn parse_tls_directive(dir: &DirectiveNode) -> ParseResult<TlsConnectionPolicy> 
     }
 
     Ok(policy)
+}
+
+fn parse_duration_secs(s: &str) -> Option<u64> {
+    let s = s.trim();
+    if let Some(v) = s.strip_suffix("ms") {
+        v.parse::<u64>().ok().map(|ms| (ms + 999) / 1000)
+    } else if let Some(v) = s.strip_suffix('s') {
+        v.parse::<u64>().ok()
+    } else if let Some(v) = s.strip_suffix('m') {
+        v.parse::<u64>().ok().map(|m| m * 60)
+    } else if let Some(v) = s.strip_suffix('h') {
+        v.parse::<u64>().ok().map(|h| h * 3600)
+    } else {
+        s.parse::<u64>().ok()
+    }
+}
+
+fn parse_dns_provider_directive(dir: &DirectiveNode) -> ParseResult<DnsProviderConfig> {
+    let mut config = DnsProviderConfig::default();
+    let provider_name = dir
+        .args
+        .first()
+        .cloned()
+        .unwrap_or_else(|| "cloudflare".to_string());
+    config.name = provider_name;
+
+    if dir.args.len() >= 2 {
+        config.api_token = Some(dir.args[1].clone());
+    }
+
+    if let Some(ref block) = dir.block {
+        for sub in block {
+            match sub.name.as_str() {
+                "api_token" | "token" => {
+                    config.api_token = sub.args.first().cloned();
+                }
+                "zone_token" => {
+                    config.zone_token = sub.args.first().cloned();
+                }
+                "resolvers" | "resolver" => {
+                    config.resolvers = Some(sub.args.clone());
+                }
+                "propagation_delay" | "propagation_timeout" => {
+                    if let Some(arg) = sub.args.first() {
+                        config.propagation_delay_secs = parse_duration_secs(arg);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    Ok(config)
 }
 
 fn merge_matcher_set(dst: &mut MatcherSet, src: &MatcherSet) {

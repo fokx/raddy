@@ -46,6 +46,7 @@ fn test_cli_list_modules() {
     assert!(stdout.contains("http.handlers.reverse_proxy"));
     assert!(stdout.contains("http.handlers.file_server"));
     assert!(stdout.contains("tls.issuance.acme"));
+    assert!(stdout.contains("dns.providers.cloudflare"));
 
     // JSON output
     let output_json = raddy_bin()
@@ -62,6 +63,10 @@ fn test_cli_list_modules() {
     assert!(
         list.iter()
             .any(|m| m["name"] == "http.handlers.reverse_proxy")
+    );
+    assert!(
+        list.iter()
+            .any(|m| m["name"] == "dns.providers.cloudflare")
     );
 }
 

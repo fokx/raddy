@@ -132,11 +132,15 @@ pub fn list_modules(as_json: bool) {
         ("http.matchers.not", "Invert wrapped matcher evaluation"),
         (
             "tls.issuance.acme",
-            "ACME automated certificate management (HTTP-01, TLS-ALPN-01)",
+            "ACME automated certificate management (HTTP-01, TLS-ALPN-01, DNS-01)",
         ),
         (
             "tls.issuance.internal",
             "Embedded local CA automated certificate issuance",
+        ),
+        (
+            "dns.providers.cloudflare",
+            "Cloudflare DNS-01 ACME challenge provider plugin (caddy-dns/cloudflare)",
         ),
         (
             "admin.api",

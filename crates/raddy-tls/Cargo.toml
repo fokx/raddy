@@ -29,6 +29,8 @@ ipnet = "2"
 ring = "0.17"
 regex = "1"
 pem = "3"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }
+axum = "0.8"

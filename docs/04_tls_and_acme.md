@@ -23,7 +23,38 @@ flowchart TD
 - **ACME Client (`instant-acme`)**: Interacts with ACME v2 endpoints (Let's Encrypt, ZeroSSL, or custom CAs) using ECC P-256 keys.
 - **TLS-ALPN-01 Solver (RFC 8737)**: Solves challenges over port 443 using the custom TLS extension `id-pe-acmeIdentifier` with zero disruption to active HTTP traffic.
 - **HTTP-01 Solver**: In-memory challenge store (`Http01ChallengeStore`) that intercepts token requests at `/.well-known/acme-challenge/*` on port 80.
+- **DNS-01 Solver (`caddy-dns/cloudflare` plugin)**: Automated DNS-01 challenge solver using the Cloudflare API for wildcard certificates (`*.example.com`) and private servers behind firewalls.
 - **Automatic HTTP-to-HTTPS Redirection**: Automatically generates a cleartext HTTP listener on port 80 that performs 308 permanent redirects to HTTPS.
+
+### Cloudflare DNS-01 Configuration
+
+Configure Cloudflare DNS challenge either globally or per-site:
+
+#### Global Configuration
+```caddyfile
+{
+    acme_dns cloudflare {env.CLOUDFLARE_API_TOKEN}
+}
+
+*.example.com {
+    reverse_proxy localhost:8080
+}
+```
+
+#### Per-Site Configuration
+```caddyfile
+*.example.com {
+    tls {
+        dns cloudflare {
+            api_token {env.CF_API_TOKEN}
+            zone_token {env.CF_ZONE_TOKEN}
+            resolvers 1.1.1.1 1.0.0.1
+            propagation_delay 5s
+        }
+    }
+    reverse_proxy localhost:8080
+}
+```
 
 ---
 

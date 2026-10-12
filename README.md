@@ -58,7 +58,8 @@ Caddy revolutionized web serving with human-friendly configuration and automatic
 
 ### 🔒 Automated TLS & Certificate Management
 - **Zero-Config ACME:** Automatic HTTPS with Let's Encrypt and ZeroSSL via `instant-acme`.
-- **Challenge Solvers:** Built-in automated TLS-ALPN-01 and HTTP-01 challenge handling.
+- **Challenge Solvers:** Built-in automated TLS-ALPN-01, HTTP-01, and DNS-01 challenge handling.
+- **DNS-01 ACME Provider Plugin (`caddy-dns/cloudflare`):** Cloudflare DNS-01 challenge provider plugin (`dns.providers.cloudflare`) for automated certificate validation and wildcard domain support (`*.example.com`).
 - **Internal PKI / Local CA:** Automatic self-signed root and leaf certificate generation via `rcgen` for local development (`tls internal`).
 - **Dynamic SNI Matching:** Multi-domain routing with lazy certificate loading, background renewals, and public/private IP SAN support.
 

@@ -43,6 +43,16 @@ impl Http01ChallengeStore {
     }
 }
 
+/// Trait implemented by DNS challenge providers (e.g. Cloudflare) for ACME DNS-01 verification.
+#[async_trait::async_trait]
+pub trait Dns01Provider: Send + Sync {
+    /// Present the DNS-01 challenge TXT record for the given domain.
+    async fn present(&self, domain: &str, key_auth_dns_value: &str) -> Result<()>;
+
+    /// Clean up the DNS-01 challenge TXT record after validation completes or fails.
+    async fn clean_up(&self, domain: &str, key_auth_dns_value: &str) -> Result<()>;
+}
+
 /// Challenge type preference for ACME certificate issuance.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ChallengeTypePreference {
@@ -57,6 +67,11 @@ pub enum ChallengeTypePreference {
     TlsAlpnOnly,
     /// Only use HTTP-01 challenge (e.g. when disable_tls_alpn_challenge is set).
     Http01Only,
+    /// Attempt DNS-01 first via configured DNS provider (e.g. Cloudflare).
+    /// Falls back to TLS-ALPN-01 and HTTP-01 if offered.
+    Dns01First,
+    /// Only use DNS-01 challenge (required for wildcard certificates *.example.com).
+    Dns01Only,
 }
 
 /// ACME Client using `instant-acme` supporting both Domain Names and Public IP Addresses (RFC 8738).
@@ -68,6 +83,7 @@ pub struct AcmeClient {
     sni_resolver: Arc<SniResolver>,
     cert_storage: Arc<dyn CertStorage>,
     challenge_preference: ChallengeTypePreference,
+    dns_provider: Option<Arc<dyn Dns01Provider>>,
 }
 
 impl AcmeClient {
@@ -85,12 +101,22 @@ impl AcmeClient {
             sni_resolver,
             cert_storage,
             challenge_preference: ChallengeTypePreference::default(),
+            dns_provider: None,
         }
     }
 
     pub fn with_challenge_preference(mut self, pref: ChallengeTypePreference) -> Self {
         self.challenge_preference = pref;
         self
+    }
+
+    pub fn with_dns_provider(mut self, provider: Arc<dyn Dns01Provider>) -> Self {
+        self.dns_provider = Some(provider);
+        self
+    }
+
+    pub fn dns_provider(&self) -> Option<Arc<dyn Dns01Provider>> {
+        self.dns_provider.clone()
     }
 
     pub fn challenge_preference(&self) -> ChallengeTypePreference {
@@ -240,16 +266,39 @@ impl AcmeClient {
         };
 
         // 3. Determine ACME challenge strategy sequence
-        let methods_to_try = match self.challenge_preference {
+        let has_wildcard = identifiers_str.iter().any(|id| id.starts_with("*."));
+        let mut methods_to_try = match self.challenge_preference {
             ChallengeTypePreference::TlsAlpnFirst => {
-                vec![ChallengeType::TlsAlpn01, ChallengeType::Http01]
+                if self.dns_provider.is_some() {
+                    vec![ChallengeType::TlsAlpn01, ChallengeType::Http01, ChallengeType::Dns01]
+                } else {
+                    vec![ChallengeType::TlsAlpn01, ChallengeType::Http01]
+                }
             }
             ChallengeTypePreference::Http01First => {
-                vec![ChallengeType::Http01, ChallengeType::TlsAlpn01]
+                if self.dns_provider.is_some() {
+                    vec![ChallengeType::Http01, ChallengeType::TlsAlpn01, ChallengeType::Dns01]
+                } else {
+                    vec![ChallengeType::Http01, ChallengeType::TlsAlpn01]
+                }
             }
             ChallengeTypePreference::TlsAlpnOnly => vec![ChallengeType::TlsAlpn01],
             ChallengeTypePreference::Http01Only => vec![ChallengeType::Http01],
+            ChallengeTypePreference::Dns01First => {
+                vec![ChallengeType::Dns01, ChallengeType::TlsAlpn01, ChallengeType::Http01]
+            }
+            ChallengeTypePreference::Dns01Only => vec![ChallengeType::Dns01],
         };
+
+        if has_wildcard {
+            if self.dns_provider.is_some() {
+                methods_to_try = vec![ChallengeType::Dns01];
+            } else {
+                return Err(TlsError::Acme(
+                    "Wildcard domain certificate requested (*.), which requires DNS-01 challenge, but no DNS challenge provider is configured.".into()
+                ));
+            }
+        }
 
         let num_methods = methods_to_try.len();
         let mut last_error = None;
@@ -277,9 +326,10 @@ impl AcmeClient {
             };
             tracing::debug!("ACME order created: {}", order.url());
 
-            // 4. Handle TLS-ALPN-01 or HTTP-01 Challenges
+            // 4. Handle TLS-ALPN-01, HTTP-01, or DNS-01 Challenges
             let mut active_tokens = Vec::new();
             let mut active_alpn_ids = Vec::new();
+            let mut active_dns_records = Vec::new();
             let mut authorizations = order.authorizations();
             let mut auth_error = None;
 
@@ -299,6 +349,10 @@ impl AcmeClient {
                     continue;
                 }
 
+                let has_dns = authz
+                    .challenges
+                    .iter()
+                    .any(|c| c.r#type == ChallengeType::Dns01);
                 let has_tls_alpn = authz
                     .challenges
                     .iter()
@@ -319,33 +373,102 @@ impl AcmeClient {
                 );
 
                 // Determine which challenge solver to use for this authorization
-                let chosen_type = if preferred_challenge == ChallengeType::TlsAlpn01 {
-                    if has_tls_alpn {
-                        ChallengeType::TlsAlpn01
-                    } else if has_http01 {
-                        ChallengeType::Http01
-                    } else {
-                        auth_error = Some(format!(
-                            "Neither TLS-ALPN-01 nor HTTP-01 challenge offered for '{}'",
-                            id_str
-                        ));
-                        break;
+                let chosen_type = match preferred_challenge {
+                    ChallengeType::Dns01 => {
+                        if has_dns && self.dns_provider.is_some() {
+                            ChallengeType::Dns01
+                        } else if has_tls_alpn {
+                            ChallengeType::TlsAlpn01
+                        } else if has_http01 {
+                            ChallengeType::Http01
+                        } else {
+                            auth_error = Some(format!(
+                                "DNS-01 challenge not available or no provider configured for '{}'",
+                                id_str
+                            ));
+                            break;
+                        }
                     }
-                } else {
-                    if has_http01 {
-                        ChallengeType::Http01
-                    } else if has_tls_alpn {
-                        ChallengeType::TlsAlpn01
-                    } else {
-                        auth_error = Some(format!(
-                            "Neither HTTP-01 nor TLS-ALPN-01 challenge offered for '{}'",
-                            id_str
-                        ));
+                    ChallengeType::TlsAlpn01 => {
+                        if has_tls_alpn {
+                            ChallengeType::TlsAlpn01
+                        } else if has_http01 {
+                            ChallengeType::Http01
+                        } else if has_dns && self.dns_provider.is_some() {
+                            ChallengeType::Dns01
+                        } else {
+                            auth_error = Some(format!(
+                                "Neither TLS-ALPN-01 nor HTTP-01 challenge offered for '{}'",
+                                id_str
+                            ));
+                            break;
+                        }
+                    }
+                    ChallengeType::Http01 => {
+                        if has_http01 {
+                            ChallengeType::Http01
+                        } else if has_tls_alpn {
+                            ChallengeType::TlsAlpn01
+                        } else if has_dns && self.dns_provider.is_some() {
+                            ChallengeType::Dns01
+                        } else {
+                            auth_error = Some(format!(
+                                "Neither HTTP-01 nor TLS-ALPN-01 challenge offered for '{}'",
+                                id_str
+                            ));
+                            break;
+                        }
+                    }
+                    _ => {
+                        auth_error = Some(format!("Unsupported challenge strategy for '{}'", id_str));
                         break;
                     }
                 };
 
-                if chosen_type == ChallengeType::TlsAlpn01 {
+                if chosen_type == ChallengeType::Dns01 {
+                    let provider = match self.dns_provider.as_ref() {
+                        Some(p) => p,
+                        None => {
+                            auth_error = Some("ACME DNS-01 challenge selected but no DNS provider configured".into());
+                            break;
+                        }
+                    };
+
+                    let mut dns_challenge = match authz.challenge(ChallengeType::Dns01) {
+                        Some(c) => c,
+                        None => {
+                            auth_error = Some(format!(
+                                "DNS-01 challenge handle missing for '{}'",
+                                id_str
+                            ));
+                            break;
+                        }
+                    };
+
+                    let key_auth = dns_challenge.key_authorization();
+                    let dns_value = key_auth.dns_value();
+                    let clean_domain = id_str.trim_start_matches("*.").to_string();
+
+                    tracing::info!(
+                        "Solving ACME challenge for '{}' using DNS-01 (record: '_acme-challenge.{}')...",
+                        id_str,
+                        clean_domain
+                    );
+
+                    if let Err(e) = provider.present(&clean_domain, &dns_value).await {
+                        auth_error = Some(format!(
+                            "Failed to present DNS-01 challenge for '{}': {}",
+                            id_str, e
+                        ));
+                        break;
+                    }
+                    active_dns_records.push((clean_domain, dns_value));
+
+                    if let Err(e) = dns_challenge.set_ready().await {
+                        auth_error = Some(format!("Failed to set DNS-01 challenge ready: {}", e));
+                        break;
+                    }
+                } else if chosen_type == ChallengeType::TlsAlpn01 {
                     let mut alpn_challenge = match authz.challenge(ChallengeType::TlsAlpn01) {
                         Some(c) => c,
                         None => {
@@ -473,6 +596,11 @@ impl AcmeClient {
                 for id in &active_alpn_ids {
                     self.sni_resolver.remove_alpn_challenge(id);
                 }
+                for (domain, dns_value) in &active_dns_records {
+                    if let Some(ref p) = self.dns_provider {
+                        let _ = p.clean_up(domain, dns_value).await;
+                    }
+                }
 
                 if !is_last_attempt {
                     tracing::warn!(
@@ -490,12 +618,17 @@ impl AcmeClient {
             tracing::debug!("Polling ACME order status until validation completes...");
             let poll_res = order.poll_ready(&RetryPolicy::default()).await;
 
-            // Clean up challenge tokens and ALPN challenge certificates immediately
+            // Clean up challenge tokens, ALPN challenge certificates, and DNS TXT records immediately
             for token in &active_tokens {
                 self.challenge_store.remove(token);
             }
             for id in &active_alpn_ids {
                 self.sni_resolver.remove_alpn_challenge(id);
+            }
+            for (domain, dns_value) in &active_dns_records {
+                if let Some(ref p) = self.dns_provider {
+                    let _ = p.clean_up(domain, dns_value).await;
+                }
             }
 
             let status = match poll_res {
