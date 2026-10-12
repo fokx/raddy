@@ -15,6 +15,7 @@ raddy-caddyfile = { version = "0.4.0", path = "../raddy-caddyfile" }
 raddy-http = { version = "0.4.0", path = "../raddy-http" }
 raddy-tls = { version = "0.4.0", path = "../raddy-tls" }
 raddy-proxy = { version = "0.4.0", path = "../raddy-proxy" }
+raddy-l4 = { version = "0.4.0", path = "../raddy-l4" }
 axum = "0.8"
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }

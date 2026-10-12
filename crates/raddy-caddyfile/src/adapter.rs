@@ -77,6 +77,8 @@ pub struct Adapter {
     server_options: Vec<ServerGlobalOptions>,
     default_bind: Option<Vec<String>>,
     cache_global_options: Option<DirectiveNode>,
+    layer4_global_options: Vec<DirectiveNode>,
+    layer4_site_blocks: Vec<SiteBlockNode>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -127,6 +129,8 @@ impl Adapter {
             server_options: Vec::new(),
             default_bind: None,
             cache_global_options: None,
+            layer4_global_options: Vec::new(),
+            layer4_site_blocks: Vec::new(),
         }
     }
 
@@ -146,6 +150,10 @@ impl Adapter {
 
         // 2. Process each site block
         for site in &caddyfile.site_blocks {
+            if site.addresses == ["layer4"] {
+                self.layer4_site_blocks.push(site.clone());
+                continue;
+            }
             self.adapt_site_block(site, &mut servers)?;
         }
 
@@ -157,20 +165,35 @@ impl Adapter {
             .as_ref()
             .and_then(|a| a.disabled)
             .unwrap_or(false);
-        if !auto_https_disabled {
+        if !auto_https_disabled && !servers.is_empty() {
             self.setup_automatic_https(&mut servers);
         }
 
         // 4. Apply server global options overrides
         self.apply_server_options(&mut servers)?;
 
-        let http_app = HttpApp { servers };
-        config
-            .set_http_app(http_app)
-            .map_err(|e| ParseError::Adaptation {
-                line: 1,
-                message: format!("Failed to serialize HTTP app: {}", e),
-            })?;
+        if !servers.is_empty()
+            || (self.layer4_global_options.is_empty() && self.layer4_site_blocks.is_empty())
+        {
+            let http_app = HttpApp { servers };
+            config
+                .set_http_app(http_app)
+                .map_err(|e| ParseError::Adaptation {
+                    line: 1,
+                    message: format!("Failed to serialize HTTP app: {}", e),
+                })?;
+        }
+
+        // 5. Adapt Layer 4 app if configured
+        if !self.layer4_global_options.is_empty() || !self.layer4_site_blocks.is_empty() {
+            let l4_app = self.adapt_layer4()?;
+            config
+                .set_layer4_app(l4_app)
+                .map_err(|e| ParseError::Adaptation {
+                    line: 1,
+                    message: format!("Failed to serialize Layer 4 app: {}", e),
+                })?;
+        }
 
         if self.email.is_some()
             || self.acme_ca.is_some()
@@ -347,6 +370,9 @@ impl Adapter {
                 }
                 "cache" => {
                     self.cache_global_options = Some(opt.clone());
+                }
+                "layer4" => {
+                    self.layer4_global_options.push(opt.clone());
                 }
                 _ => {}
             }
@@ -1930,6 +1956,338 @@ impl Adapter {
                 }
             }
         }
+    }
+
+    fn adapt_layer4(&self) -> ParseResult<Layer4App> {
+        let mut servers: HashMap<String, Layer4Server> = HashMap::new();
+        let mut server_counter = 0;
+
+        for opt in &self.layer4_global_options {
+            if let Some(ref block) = opt.block {
+                for server_dir in block {
+                    let (name, srv) = self.parse_layer4_server_directive(server_dir, &mut server_counter)?;
+                    servers.insert(name, srv);
+                }
+            }
+        }
+
+        for site in &self.layer4_site_blocks {
+            for server_dir in &site.directives {
+                let (name, srv) = self.parse_layer4_server_directive(server_dir, &mut server_counter)?;
+                servers.insert(name, srv);
+            }
+        }
+
+        Ok(Layer4App { servers })
+    }
+
+    fn parse_layer4_server_directive(
+        &self,
+        dir: &DirectiveNode,
+        counter: &mut usize,
+    ) -> ParseResult<(String, Layer4Server)> {
+        let srv_name = format!("srv{}", counter);
+        *counter += 1;
+
+        let mut listen = vec![dir.name.clone()];
+        listen.extend(dir.args.clone());
+
+        let mut routes = Vec::new();
+        let mut named_matchers: HashMap<String, Layer4MatcherSet> = HashMap::new();
+        let mut matching_timeout = None;
+        let mut idle_timeout = None;
+        let mut implicit_handlers = Vec::new();
+
+        if let Some(ref block) = dir.block {
+            for child in block {
+                if child.name.starts_with('@') {
+                    let (m_name, m_set) = parse_layer4_named_matcher(child)?;
+                    named_matchers.insert(m_name, m_set);
+                } else if child.name == "matching_timeout" {
+                    matching_timeout = child.args.first().cloned();
+                } else if child.name == "idle_timeout" {
+                    idle_timeout = child.args.first().cloned();
+                } else if child.name == "route" {
+                    let route = self.parse_layer4_route_directive(child, &named_matchers)?;
+                    routes.push(route);
+                } else {
+                    let handler_cfg = parse_layer4_handler_directive(child)?;
+                    implicit_handlers.push(handler_cfg);
+                }
+            }
+        }
+
+        if !implicit_handlers.is_empty() {
+            routes.push(Layer4Route {
+                r#match: None,
+                handle: implicit_handlers,
+            });
+        }
+
+        let server = Layer4Server {
+            listen,
+            routes,
+            matching_timeout,
+            idle_timeout,
+        };
+
+        Ok((srv_name, server))
+    }
+
+    fn parse_layer4_route_directive(
+        &self,
+        dir: &DirectiveNode,
+        named_matchers: &HashMap<String, Layer4MatcherSet>,
+    ) -> ParseResult<Layer4Route> {
+        let mut match_sets = Vec::new();
+        let mut matcher_names = Vec::new();
+
+        if let Some(ref m) = dir.matcher {
+            matcher_names.push(m.clone());
+        }
+        for arg in &dir.args {
+            if arg.starts_with('@') {
+                matcher_names.push(arg.clone());
+            }
+        }
+
+        for m_name in &matcher_names {
+            if let Some(set) = named_matchers.get(m_name) {
+                match_sets.push(set.clone());
+            } else {
+                return Err(ParseError::Adaptation {
+                    line: dir.span.line,
+                    message: format!("Unrecognized named matcher '{}' in layer4 route", m_name),
+                });
+            }
+        }
+
+        let mut handlers = Vec::new();
+        if let Some(ref block) = dir.block {
+            for child in block {
+                let handler_cfg = parse_layer4_handler_directive(child)?;
+                handlers.push(handler_cfg);
+            }
+        }
+
+        let r_match = if match_sets.is_empty() {
+            None
+        } else {
+            Some(match_sets)
+        };
+
+        Ok(Layer4Route {
+            r#match: r_match,
+            handle: handlers,
+        })
+    }
+}
+
+fn parse_layer4_named_matcher(dir: &DirectiveNode) -> ParseResult<(String, Layer4MatcherSet)> {
+    let name = dir.name.clone();
+    let mut set = Layer4MatcherSet::default();
+
+    if !dir.args.is_empty() {
+        parse_layer4_matcher_tokens(&dir.args, &mut set, dir.span.line)?;
+    }
+
+    if let Some(ref block) = dir.block {
+        for child in block {
+            let mut tokens = vec![child.name.clone()];
+            tokens.extend(child.args.clone());
+            parse_layer4_matcher_tokens(&tokens, &mut set, child.span.line)?;
+        }
+    }
+
+    Ok((name, set))
+}
+
+fn parse_layer4_matcher_tokens(
+    tokens: &[String],
+    set: &mut Layer4MatcherSet,
+    line: usize,
+) -> ParseResult<()> {
+    if tokens.is_empty() {
+        return Ok(());
+    }
+
+    match tokens[0].as_str() {
+        "tls" => {
+            let mut tls = set.tls.take().unwrap_or_default();
+            if tokens.len() >= 3 && tokens[1] == "sni" {
+                tls.sni.extend(tokens[2..].iter().cloned());
+            } else if tokens.len() >= 3 && tokens[1] == "alpn" {
+                tls.alpn.extend(tokens[2..].iter().cloned());
+            }
+            set.tls = Some(tls);
+        }
+        "http" => {
+            let methods = if tokens.len() > 1 {
+                tokens[1..].iter().cloned().collect()
+            } else {
+                Vec::new()
+            };
+            set.http = Some(Layer4HttpMatcher { methods });
+        }
+        "ssh" => {
+            set.ssh = Some(Layer4SshMatcher {});
+        }
+        "proxy_protocol" => {
+            set.proxy_protocol = Some(Layer4ProxyProtocolMatcher {});
+        }
+        "remote_ip" | "ip" => {
+            let ranges = tokens[1..].iter().cloned().collect();
+            set.remote_ip = Some(Layer4IpMatcher { ranges });
+        }
+        "local_ip" => {
+            let ranges = tokens[1..].iter().cloned().collect();
+            set.local_ip = Some(Layer4IpMatcher { ranges });
+        }
+        "quic" => {
+            set.quic = Some(Layer4QuicMatcher {});
+        }
+        "wireguard" => {
+            set.wireguard = Some(Layer4WireguardMatcher {});
+        }
+        "socks4" => {
+            set.socks4 = Some(Layer4SocksMatcher {});
+        }
+        "socks5" => {
+            set.socks5 = Some(Layer4SocksMatcher {});
+        }
+        "postgres" => {
+            set.postgres = Some(Layer4PostgresMatcher {});
+        }
+        "openvpn" => {
+            set.openvpn = Some(Layer4OpenvpnMatcher {});
+        }
+        "rdp" => {
+            set.rdp = Some(Layer4RdpMatcher {});
+        }
+        "xmpp" => {
+            set.xmpp = Some(Layer4XmppMatcher {});
+        }
+        "regexp" => {
+            if let Some(pattern) = tokens.get(1) {
+                set.regexp = Some(pattern.clone());
+            }
+        }
+        "not" => {
+            if tokens.len() > 1 {
+                let mut inner = Layer4MatcherSet::default();
+                parse_layer4_matcher_tokens(&tokens[1..], &mut inner, line)?;
+                let mut not_vec = set.not.take().unwrap_or_default();
+                not_vec.push(inner);
+                set.not = Some(not_vec);
+            }
+        }
+        other => {
+            return Err(ParseError::Adaptation {
+                line,
+                message: format!("Unknown layer4 matcher '{}'", other),
+            });
+        }
+    }
+
+    Ok(())
+}
+
+fn parse_layer4_handler_directive(dir: &DirectiveNode) -> ParseResult<Layer4HandlerConfig> {
+    match dir.name.as_str() {
+        "proxy" | "reverse_proxy" => {
+            let mut upstreams = dir.args.clone();
+            let mut lb_policy = None;
+            let mut proxy_protocol = None;
+            let mut health_interval = None;
+            let mut health_timeout = None;
+            let mut use_tls = false;
+            let mut tls_insecure = false;
+
+            if let Some(ref block) = dir.block {
+                for sub in block {
+                    match sub.name.as_str() {
+                        "upstream" | "to" => {
+                            upstreams.extend(sub.args.clone());
+                        }
+                        "lb_policy" | "load_balancing" | "policy" => {
+                            lb_policy = sub.args.first().cloned();
+                        }
+                        "proxy_protocol" => {
+                            proxy_protocol = sub.args.first().cloned();
+                        }
+                        "health_interval" => {
+                            health_interval = sub.args.first().cloned();
+                        }
+                        "health_timeout" => {
+                            health_timeout = sub.args.first().cloned();
+                        }
+                        "tls" => {
+                            use_tls = true;
+                        }
+                        "tls_insecure" | "insecure" => {
+                            tls_insecure = true;
+                        }
+                        _ => {}
+                    }
+                }
+            }
+
+            let upstreams_json: Vec<serde_json::Value> = upstreams
+                .into_iter()
+                .map(|dial| serde_json::json!({ "dial": [dial] }))
+                .collect();
+
+            let mut cfg = Layer4HandlerConfig::new("proxy")
+                .with_field("upstreams", upstreams_json);
+
+            if let Some(p) = lb_policy {
+                cfg = cfg.with_field("lb_policy", p);
+            }
+            if let Some(pp) = proxy_protocol {
+                cfg = cfg.with_field("proxy_protocol", pp);
+            }
+            if let Some(hi) = health_interval {
+                cfg = cfg.with_field("health_interval", hi);
+            }
+            if let Some(ht) = health_timeout {
+                cfg = cfg.with_field("health_timeout", ht);
+            }
+            if use_tls {
+                cfg = cfg.with_field("tls", true);
+            }
+            if tls_insecure {
+                cfg = cfg.with_field("tls_insecure", true);
+            }
+
+            Ok(cfg)
+        }
+        "echo" => Ok(Layer4HandlerConfig::new("echo")),
+        "close" => Ok(Layer4HandlerConfig::new("close")),
+        "tls" => Ok(Layer4HandlerConfig::new("tls")),
+        "postgres_tls" => Ok(Layer4HandlerConfig::new("postgres_tls")),
+        "vars" => {
+            let mut vars_map = HashMap::new();
+            if dir.args.len() >= 2 {
+                vars_map.insert(dir.args[0].clone(), dir.args[1].clone());
+            }
+            if let Some(ref block) = dir.block {
+                for sub in block {
+                    if let Some(val) = sub.args.first() {
+                        vars_map.insert(sub.name.clone(), val.clone());
+                    }
+                }
+            }
+            Ok(Layer4HandlerConfig::new("vars").with_field("vars", vars_map))
+        }
+        "throttle" => {
+            let bytes_per_sec: u64 = dir
+                .args
+                .first()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(1024 * 1024);
+            Ok(Layer4HandlerConfig::new("throttle").with_field("bytes_per_second", bytes_per_sec))
+        }
+        other => Ok(Layer4HandlerConfig::new(other)),
     }
 }
 

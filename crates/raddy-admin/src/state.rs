@@ -3,6 +3,7 @@ use parking_lot::Mutex;
 use raddy_core::config::Config;
 use raddy_core::module::ModuleRegistry;
 use raddy_http::server::ServerManager;
+use raddy_l4::Layer4Manager;
 use raddy_tls::TlsManager;
 use std::sync::Arc;
 use tokio::sync::watch;
@@ -15,6 +16,7 @@ pub struct AppState {
     pub registry: Arc<ModuleRegistry>,
     pub tls_manager: Option<Arc<TlsManager>>,
     pub active_shutdown: Arc<Mutex<Option<watch::Sender<bool>>>>,
+    pub active_l4_shutdown: Arc<Mutex<Option<watch::Sender<bool>>>>,
     pub admin_shutdown: Arc<Mutex<Option<watch::Sender<bool>>>>,
     pub exit_notify: Arc<tokio::sync::Notify>,
 }
@@ -30,13 +32,14 @@ impl AppState {
             registry,
             tls_manager,
             active_shutdown: Arc::new(Mutex::new(None)),
+            active_l4_shutdown: Arc::new(Mutex::new(None)),
             admin_shutdown: Arc::new(Mutex::new(None)),
             exit_notify: Arc::new(tokio::sync::Notify::new()),
         }
     }
 
     /// Performs zero-downtime hot reload:
-    /// 1. Validates and compiles new server instances from `new_config`.
+    /// 1. Validates and compiles new HTTP & Layer 4 server instances from `new_config`.
     /// 2. Binds listeners for new servers. If binding fails, aborts reload and leaves old servers running.
     /// 3. Gracefully drains old servers via watch shutdown signal.
     /// 4. Spawns new server background tasks.
@@ -47,24 +50,47 @@ impl AppState {
                 .await
                 .map_err(AdminError::HttpServer)?;
 
-        // Attempt binding first. If this fails, the old server continues serving without interruption.
+        // Attempt binding HTTP servers first.
         server_manager
             .bind_all()
             .await
             .map_err(AdminError::HttpServer)?;
 
+        // Prepare and bind Layer 4 servers
+        let mut l4_manager =
+            Layer4Manager::from_config(&new_config, self.tls_manager.clone())
+                .await
+                .map_err(|e| AdminError::Internal(e.to_string()))?;
+
+        l4_manager
+            .bind_all()
+            .await
+            .map_err(|e| AdminError::Internal(e.to_string()))?;
+
         let pending_acme = server_manager.pending_acme().to_vec();
 
-        // Gracefully drain existing servers
+        // Gracefully drain existing HTTP servers
         {
             let mut lock = self.active_shutdown.lock();
             if let Some(old_tx) = lock.take() {
                 let _ = old_tx.send(true);
             }
 
-            // Spawn new servers detached
+            // Spawn new HTTP servers detached
             let new_shutdown_tx = server_manager.spawn_all_detached();
             *lock = Some(new_shutdown_tx);
+        }
+
+        // Gracefully drain existing Layer 4 servers
+        {
+            let mut l4_lock = self.active_l4_shutdown.lock();
+            if let Some(old_tx) = l4_lock.take() {
+                let _ = old_tx.send(true);
+            }
+
+            // Spawn new Layer 4 servers detached
+            let new_l4_shutdown_tx = l4_manager.spawn_all_detached();
+            *l4_lock = Some(new_l4_shutdown_tx);
         }
 
         // Atomically swap in the new configuration
@@ -132,12 +158,17 @@ impl AppState {
         Ok(())
     }
 
-    /// Gracefully stops all active HTTP/HTTPS servers.
+    /// Gracefully stops all active HTTP/HTTPS and Layer 4 servers.
     pub fn stop_servers(&self) {
         let mut lock = self.active_shutdown.lock();
         if let Some(tx) = lock.take() {
             let _ = tx.send(true);
-            tracing::info!("Shutdown signal sent to all running servers");
+            tracing::info!("Shutdown signal sent to all running HTTP servers");
+        }
+        let mut l4_lock = self.active_l4_shutdown.lock();
+        if let Some(tx) = l4_lock.take() {
+            let _ = tx.send(true);
+            tracing::info!("Shutdown signal sent to all running Layer 4 servers");
         }
     }
 

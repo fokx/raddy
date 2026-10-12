@@ -150,6 +150,46 @@ pub fn list_modules(as_json: bool) {
             "admin.api",
             "Axum-powered REST Admin API for runtime configuration and control",
         ),
+        (
+            "layer4",
+            "Layer 4 (TCP/UDP) transport application (caddy-l4 parity)",
+        ),
+        (
+            "layer4.handlers.proxy",
+            "Layer 4 reverse proxy with dynamic load balancing and proxy protocol",
+        ),
+        (
+            "layer4.handlers.echo",
+            "Layer 4 echo server returning received bytes",
+        ),
+        (
+            "layer4.handlers.close",
+            "Layer 4 connection closer",
+        ),
+        (
+            "layer4.handlers.tls",
+            "Layer 4 TLS termination and decrypted connection forwarding",
+        ),
+        (
+            "layer4.matchers.tls",
+            "Match TLS ClientHello SNI and ALPN protocols",
+        ),
+        (
+            "layer4.matchers.http",
+            "Match incoming HTTP request methods and preambles",
+        ),
+        (
+            "layer4.matchers.ssh",
+            "Match SSH client protocol banner",
+        ),
+        (
+            "layer4.matchers.proxy_protocol",
+            "Match HAProxy PROXY protocol v1/v2 headers",
+        ),
+        (
+            "layer4.matchers.remote_ip",
+            "Match client IP address and CIDR subnets",
+        ),
     ];
 
     if as_json {

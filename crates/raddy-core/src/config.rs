@@ -45,6 +45,18 @@ impl Config {
         self.apps.insert("tls".to_string(), val);
         Ok(())
     }
+
+    pub fn layer4_app(&self) -> Option<Layer4App> {
+        self.apps
+            .get("layer4")
+            .and_then(|v| serde_json::from_value(v.clone()).ok())
+    }
+
+    pub fn set_layer4_app(&mut self, app: Layer4App) -> Result<(), serde_json::Error> {
+        let val = serde_json::to_value(app)?;
+        self.apps.insert("layer4".to_string(), val);
+        Ok(())
+    }
 }
 
 /// Admin API server configuration.
@@ -478,5 +490,169 @@ pub fn resolve_acme_ca(ca_or_alias: &str) -> String {
         | "le" => LETS_ENCRYPT_PRODUCTION.to_string(),
         "zerossl" | "zerossl_production" | "zerossl-production" => ZEROSSL_PRODUCTION.to_string(),
         _ => ca_or_alias.trim().to_string(),
+    }
+}
+
+/// Layer 4 (TCP/UDP) App configuration (caddy-l4 parity)
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct Layer4App {
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub servers: HashMap<String, Layer4Server>,
+}
+
+/// Layer 4 Server definition.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct Layer4Server {
+    #[serde(default)]
+    pub listen: Vec<String>,
+
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub routes: Vec<Layer4Route>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub matching_timeout: Option<String>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub idle_timeout: Option<String>,
+}
+
+/// Layer 4 Route definition.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct Layer4Route {
+    #[serde(rename = "match", skip_serializing_if = "Option::is_none")]
+    pub r#match: Option<Vec<Layer4MatcherSet>>,
+
+    #[serde(default)]
+    pub handle: Vec<Layer4HandlerConfig>,
+}
+
+/// Layer 4 Matcher Set (evaluated in AND logic).
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct Layer4MatcherSet {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tls: Option<Layer4TlsMatcher>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub http: Option<Layer4HttpMatcher>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ssh: Option<Layer4SshMatcher>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub proxy_protocol: Option<Layer4ProxyProtocolMatcher>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub remote_ip: Option<Layer4IpMatcher>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ip: Option<Layer4IpMatcher>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub local_ip: Option<Layer4IpMatcher>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub quic: Option<Layer4QuicMatcher>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub wireguard: Option<Layer4WireguardMatcher>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub socks4: Option<Layer4SocksMatcher>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub socks5: Option<Layer4SocksMatcher>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub postgres: Option<Layer4PostgresMatcher>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub openvpn: Option<Layer4OpenvpnMatcher>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rdp: Option<Layer4RdpMatcher>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub xmpp: Option<Layer4XmppMatcher>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub regexp: Option<String>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub not: Option<Vec<Layer4MatcherSet>>,
+
+    #[serde(flatten, default, skip_serializing_if = "HashMap::is_empty")]
+    pub extra: HashMap<String, serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct Layer4TlsMatcher {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sni: Vec<String>,
+
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub alpn: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct Layer4HttpMatcher {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub methods: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct Layer4SshMatcher {}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct Layer4ProxyProtocolMatcher {}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct Layer4IpMatcher {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ranges: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct Layer4QuicMatcher {}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct Layer4WireguardMatcher {}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct Layer4SocksMatcher {}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct Layer4PostgresMatcher {}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct Layer4OpenvpnMatcher {}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct Layer4RdpMatcher {}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct Layer4XmppMatcher {}
+
+/// Layer 4 Handler configuration inside a route.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct Layer4HandlerConfig {
+    pub handler: String,
+
+    #[serde(flatten)]
+    pub details: HashMap<String, serde_json::Value>,
+}
+
+impl Layer4HandlerConfig {
+    pub fn new(handler: impl Into<String>) -> Self {
+        Self {
+            handler: handler.into(),
+            details: HashMap::new(),
+        }
+    }
+
+    pub fn with_field(mut self, key: impl Into<String>, val: impl Serialize) -> Self {
+        if let Ok(v) = serde_json::to_value(val) {
+            self.details.insert(key.into(), v);
+        }
+        self
     }
 }

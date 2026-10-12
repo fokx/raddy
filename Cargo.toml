@@ -27,6 +27,7 @@ members = [
     "crates/raddy-proxy",
     "crates/raddy-admin",
     "crates/raddyserver",
+    "crates/raddy-l4",
 ]
 
 [dependencies]
@@ -36,6 +37,7 @@ raddy-http = { version = "0.4.0", path = "crates/raddy-http" }
 raddy-tls = { version = "0.4.0", path = "crates/raddy-tls" }
 raddy-proxy = { version = "0.4.0", path = "crates/raddy-proxy" }
 raddy-admin = { version = "0.4.0", path = "crates/raddy-admin" }
+raddy-l4 = { version = "0.4.0", path = "crates/raddy-l4" }
 
 tokio = { version = "1", features = ["full"] }
 clap = { version = "4", features = ["derive"] }

@@ -70,6 +70,13 @@ Caddy revolutionized web serving with human-friendly configuration and automatic
 - **Header Manipulation:** Inject, modify, or strip upstream and downstream headers (`header_up`, `header_down`).
 - **Forward Proxy & CONNECT Tunneling:** Built-in forward proxy with HTTP `CONNECT` tunneling for outbound proxying and traffic gatewaying.
 
+### 🎛️ Layer 4 (TCP/UDP) Multiplexing & Stream Routing (`caddy-l4`)
+- **Protocol Multiplexing:** Serve multiple protocols (e.g. SSH, HTTP, TLS) on the exact same port without performance overhead.
+- **Matchers:** Inspect connections by TLS SNI, ALPN, HTTP methods, SSH banners, PROXY protocol (v1/v2), IP/CIDR ranges, WireGuard, QUIC, SOCKS4/SOCKS5, Postgres SSLRequest, or regex.
+- **Handlers:** Layer 4 reverse proxy with dynamic load balancing (`round_robin`, `least_conn`, `random`, `ip_hash`), active & passive health checks, PROXY protocol header injection, echo (RFC 862), close, and TLS termination.
+- **Full UDP Support:** Bidirectional datagram forwarding, stateful packet association, and idle timeouts.
+- **Caddyfile & JSON Parity:** Seamless configuration via `layer4` block in global options or top-level, adapting to Caddy's `apps.layer4` layout.
+
 ### 📁 Static File Serving
 - **Zero-Copy Serving:** Fast, non-blocking asynchronous file delivery.
 - **Directory Browsing:** Mobile-friendly HTML index generation with breadcrumbs and human-readable file sizes (`file_server browse`).
@@ -104,6 +111,7 @@ raddy/
     ├── raddy-http/              # HTTP/1.1, HTTP/2, HTTP/3 servers, routing engine, middleware handlers
     ├── raddy-tls/               # Automated ACME client, local CA/PKI, SNI resolver, challenge solvers
     ├── raddy-proxy/             # Reverse proxy, load balancers, health checks, forward proxy & tunneling
+    ├── raddy-l4/                # Layer 4 (TCP/UDP) transport engine, matchers, handlers, and stream routing
     └── raddy-admin/             # Axum REST Admin API (:2019) and atomic ArcSwap config state manager
 ```
 
