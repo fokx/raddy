@@ -73,6 +73,10 @@ pub fn list_modules(as_json: bool) {
             "Sliding window HTTP rate limiting with zones, keys, and retry headers",
         ),
         (
+            "http.handlers.cache",
+            "Distributed RFC 7234/9111 HTTP cache handler with Souin parity, Cache-Status, and TTL control",
+        ),
+        (
             "http.handlers.headers",
             "Manipulate request and response HTTP headers",
         ),

@@ -31,17 +31,23 @@ impl CompiledRoute {
     }
 
     pub fn is_response_transformer(&self) -> bool {
-        self.handlers.iter().any(|h| h.is_response_transformer())
+        !self.handlers.is_empty() && self.handlers.iter().all(|h| h.is_response_transformer())
     }
 
     pub async fn execute(&self, ctx: &mut Context) -> Result<()> {
-        let is_transformer = self.is_response_transformer();
         for h in &self.handlers {
+            if ctx.response_written && !h.is_response_transformer() {
+                continue;
+            }
             h.handle(ctx).await?;
-            if !is_transformer && ctx.response_written {
-                break;
+        }
+
+        if ctx.response_written {
+            if let Some(pending) = ctx.remove_extension::<crate::cache::PendingCacheHandler>() {
+                pending.0.record_response(ctx);
             }
         }
+
         Ok(())
     }
 }
@@ -85,6 +91,12 @@ impl Router {
             }
         }
 
+        if ctx.response_written {
+            if let Some(pending) = ctx.remove_extension::<crate::cache::PendingCacheHandler>() {
+                pending.0.record_response(ctx);
+            }
+        }
+
         Ok(())
     }
 }
@@ -103,10 +115,12 @@ impl SubrouteHandler {
 #[async_trait]
 impl Handler for SubrouteHandler {
     fn is_response_transformer(&self) -> bool {
-        self.router
-            .routes
-            .iter()
-            .any(|r| r.is_response_transformer())
+        !self.router.routes.is_empty()
+            && self
+                .router
+                .routes
+                .iter()
+                .all(|r| r.is_response_transformer())
     }
 
     async fn handle(&self, ctx: &mut Context) -> Result<()> {
@@ -236,6 +250,12 @@ impl VirtualHostRouter {
                     st.canonical_reason().unwrap_or("Not Found")
                 ),
             );
+        }
+
+        if ctx.response_written {
+            if let Some(pending) = ctx.remove_extension::<crate::cache::PendingCacheHandler>() {
+                pending.0.record_response(ctx);
+            }
         }
 
         Ok(())
@@ -391,6 +411,14 @@ fn compile_handler(h_cfg: &HandlerConfig, registry: &ModuleRegistry) -> Result<A
                 })
                 .unwrap_or_default();
             Ok(Arc::new(raddy_core::handler::TryFilesHandler { try_files }))
+        }
+
+        "cache" | "http.handlers.cache" => {
+            let cache_cfg: crate::cache::CacheConfig = serde_json::from_value(
+                serde_json::Value::Object(h_cfg.details.clone().into_iter().collect()),
+            )
+            .map_err(|e| CoreError::Config(format!("Invalid cache handler config: {}", e)))?;
+            Ok(Arc::new(crate::cache::CacheHandler::new(cache_cfg)))
         }
 
         "rewrite" => {

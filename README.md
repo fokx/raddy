@@ -77,6 +77,7 @@ Caddy revolutionized web serving with human-friendly configuration and automatic
 - **MIME Type Detection:** Accurate MIME inference with `mime_guess`.
 
 ### ⚡ Directives & Middleware
+- `cache`: Distributed and in-memory HTTP cache with **RFC 7234 & RFC 9111** compliance (`caddyserver/cache-handler` / Souin parity), `Cache-Status` headers, `stale-while-revalidate`, conditional revalidation (`304 Not Modified`), and key normalization.
 - `encode`: Streaming on-the-fly response compression supporting both **Gzip** and **Zstandard (zstd)**.
 - `templates`: Dynamic server-side templating powered by MiniJinja with access to request headers, path, and variables.
 - `basic_auth`: Secure HTTP Basic Authentication backed by `bcrypt` password hashes.

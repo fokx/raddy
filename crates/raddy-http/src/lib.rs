@@ -4,6 +4,7 @@
 //! and server coordination.
 
 pub mod auth;
+pub mod cache;
 pub mod encode;
 pub mod error;
 pub mod fileserver;
@@ -19,6 +20,10 @@ pub mod server;
 pub mod service;
 pub mod templates;
 
+pub use cache::{
+    CacheConfig, CacheHandler, CacheKeyConfig, CacheStorageConfig, CachedResponse,
+    PendingCacheHandler,
+};
 pub use error::{HttpServerError, Result};
 pub use fileserver::FileServerHandler;
 pub use logging::LogPipeline;

@@ -26,6 +26,7 @@ pub const DIRECTIVE_ORDER: &[&str] = &[
     "timeouts",
     "redir",
     "method",
+    "cache",
     "rewrite",
     "uri",
     "try_files",
@@ -75,6 +76,7 @@ pub struct Adapter {
     named_routes: HashMap<String, NamedRouteNode>,
     server_options: Vec<ServerGlobalOptions>,
     default_bind: Option<Vec<String>>,
+    cache_global_options: Option<DirectiveNode>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -124,6 +126,7 @@ impl Adapter {
             named_routes: HashMap::new(),
             server_options: Vec::new(),
             default_bind: None,
+            cache_global_options: None,
         }
     }
 
@@ -341,6 +344,9 @@ impl Adapter {
                         }
                     }
                     self.server_options.push(srv_opt);
+                }
+                "cache" => {
+                    self.cache_global_options = Some(opt.clone());
                 }
                 _ => {}
             }
@@ -730,14 +736,26 @@ impl Adapter {
                     }
                 }
 
+                let mut respond_headers = HashMap::new();
+
                 if let Some(ref block) = dir.block {
                     for sub in block {
                         if sub.name == "body" {
                             body = sub.args.join(" ");
                         } else if sub.name == "close" {
                             close = true;
+                        } else if sub.name == "header" {
+                            if sub.args.len() >= 2 {
+                                respond_headers.insert(sub.args[0].clone(), sub.args[1..].join(" "));
+                            }
                         }
                     }
+                }
+
+                if !respond_headers.is_empty() {
+                    let mut hdr_cfg = HandlerConfig::new("headers");
+                    hdr_cfg = hdr_cfg.with_field("set_response_headers", respond_headers);
+                    configs.push(hdr_cfg);
                 }
 
                 let mut cfg = HandlerConfig::new("static_response")
@@ -1805,6 +1823,18 @@ impl Adapter {
                     cfg = cfg.with_field("storage", stor);
                 }
 
+                configs.push(cfg);
+            }
+
+            "cache" => {
+                let cache_cfg = parse_cache_directive_node(dir, self.cache_global_options.as_ref())?;
+                let mut cfg = HandlerConfig::new("cache");
+                for (k, v) in serde_json::to_value(&cache_cfg)
+                    .map(|v| v.as_object().cloned().unwrap_or_default())
+                    .unwrap_or_default()
+                {
+                    cfg = cfg.with_field(k, v);
+                }
                 configs.push(cfg);
             }
 
@@ -2980,6 +3010,238 @@ fn parse_dns_provider_directive(dir: &DirectiveNode) -> ParseResult<DnsProviderC
     }
 
     Ok(config)
+}
+
+fn parse_cache_directive_node(
+    dir: &DirectiveNode,
+    global_cache: Option<&DirectiveNode>,
+) -> ParseResult<serde_json::Value> {
+    let mut cache_name = "Souin".to_string();
+    let mut ttl_secs: u64 = 120;
+    let mut stale_secs: u64 = 0;
+    let mut allowed_http_verbs: Vec<String> = vec!["GET".to_string(), "HEAD".to_string()];
+    let mut allowed_additional_status_codes: Vec<u16> = Vec::new();
+    let mut default_cache_control: Option<String> = None;
+    let mut max_cacheable_body_bytes: usize = 0;
+    let mut mode: Option<String> = None;
+    let mut regex_exclude: Option<String> = None;
+    let mut headers: Vec<String> = Vec::new();
+    let mut storage_path: Option<String> = None;
+    let mut redis_url: Option<String> = None;
+
+    // Cache key options
+    let mut disable_body = false;
+    let mut disable_host = false;
+    let mut disable_method = false;
+    let mut disable_query = false;
+    let mut disable_scheme = false;
+    let mut sort_query = false;
+    let mut key_hash = false;
+    let mut key_hide = false;
+    let mut key_headers = Vec::new();
+
+    // Cache keys rules
+    let mut cache_keys_rules: Vec<serde_json::Value> = Vec::new();
+
+    // Helper closure to process directives from either global block or site block
+    let mut process_block = |block: &[DirectiveNode]| {
+        for sub in block {
+            match sub.name.as_str() {
+                "cache_name" => {
+                    if let Some(arg) = sub.args.first() {
+                        cache_name = arg.clone();
+                    }
+                }
+                "ttl" => {
+                    if let Some(arg) = sub.args.first() {
+                        if let Some(secs) = parse_duration_secs(arg) {
+                            ttl_secs = secs;
+                        }
+                    }
+                }
+                "stale" => {
+                    if let Some(arg) = sub.args.first() {
+                        if let Some(secs) = parse_duration_secs(arg) {
+                            stale_secs = secs;
+                        }
+                    }
+                }
+                "allowed_http_verbs" => {
+                    allowed_http_verbs = sub.args.clone();
+                }
+                "allowed_additional_status_codes" => {
+                    for arg in &sub.args {
+                        if let Ok(code) = arg.parse::<u16>() {
+                            allowed_additional_status_codes.push(code);
+                        }
+                    }
+                }
+                "default_cache_control" => {
+                    default_cache_control = Some(sub.args.join(" "));
+                }
+                "max_cacheable_body_bytes" => {
+                    if let Some(arg) = sub.args.first() {
+                        if let Ok(bytes) = arg.parse::<usize>() {
+                            max_cacheable_body_bytes = bytes;
+                        }
+                    }
+                }
+                "mode" => {
+                    if let Some(arg) = sub.args.first() {
+                        mode = Some(arg.clone());
+                    }
+                }
+                "regex" => {
+                    if let Some(ref rblock) = sub.block {
+                        for rsub in rblock {
+                            if rsub.name == "exclude" {
+                                if let Some(arg) = rsub.args.first().or(rsub.matcher.as_ref()) {
+                                    regex_exclude = Some(arg.clone());
+                                }
+                            }
+                        }
+                    }
+                }
+                "headers" => {
+                    headers.extend(sub.args.clone());
+                }
+                "badger" | "nuts" | "simplefs" => {
+                    if let Some(ref sblock) = sub.block {
+                        for ssub in sblock {
+                            if ssub.name == "path" {
+                                storage_path = ssub.args.first().cloned();
+                            }
+                        }
+                    }
+                }
+                "redis" => {
+                    if let Some(ref rblock) = sub.block {
+                        for rsub in rblock {
+                            if rsub.name == "url" {
+                                redis_url = rsub.args.first().cloned();
+                            }
+                        }
+                    }
+                }
+                "key" => {
+                    if let Some(ref kblock) = sub.block {
+                        for ksub in kblock {
+                            match ksub.name.as_str() {
+                                "disable_body" => disable_body = true,
+                                "disable_host" => disable_host = true,
+                                "disable_method" => disable_method = true,
+                                "disable_query" => disable_query = true,
+                                "disable_scheme" => disable_scheme = true,
+                                "sort_query" => sort_query = true,
+                                "hash" => key_hash = true,
+                                "hide" => key_hide = true,
+                                "headers" => key_headers.extend(ksub.args.clone()),
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+                "cache_keys" => {
+                    if let Some(ref ckblock) = sub.block {
+                        for cksub in ckblock {
+                            let pattern = cksub.name.clone();
+                            let mut ck_disable_body = false;
+                            let mut ck_disable_host = false;
+                            let mut ck_disable_method = false;
+                            let mut ck_disable_query = false;
+                            let mut ck_disable_scheme = false;
+                            let mut ck_sort_query = false;
+                            let mut ck_hash = false;
+                            let mut ck_hide = false;
+                            let mut ck_headers = Vec::new();
+
+                            if let Some(ref inner_block) = cksub.block {
+                                for isub in inner_block {
+                                    match isub.name.as_str() {
+                                        "disable_body" => ck_disable_body = true,
+                                        "disable_host" => ck_disable_host = true,
+                                        "disable_method" => ck_disable_method = true,
+                                        "disable_query" => ck_disable_query = true,
+                                        "disable_scheme" => ck_disable_scheme = true,
+                                        "sort_query" => ck_sort_query = true,
+                                        "hash" => ck_hash = true,
+                                        "hide" => ck_hide = true,
+                                        "headers" => ck_headers.extend(isub.args.clone()),
+                                        _ => {}
+                                    }
+                                }
+                            }
+
+                            cache_keys_rules.push(serde_json::json!({
+                                "pattern": pattern,
+                                "key": {
+                                    "disable_body": ck_disable_body,
+                                    "disable_host": ck_disable_host,
+                                    "disable_method": ck_disable_method,
+                                    "disable_query": ck_disable_query,
+                                    "disable_scheme": ck_disable_scheme,
+                                    "sort_query": ck_sort_query,
+                                    "hash": ck_hash,
+                                    "hide": ck_hide,
+                                    "headers": ck_headers,
+                                }
+                            }));
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    };
+
+    // 1. First inherit settings from global cache option if present
+    if let Some(global_dir) = global_cache {
+        if let Some(ref gblock) = global_dir.block {
+            process_block(gblock);
+        }
+    }
+
+    // 2. Override with site-level cache directive options
+    if let Some(ref sblock) = dir.block {
+        process_block(sblock);
+    }
+
+    // Check inline args: e.g. `cache { ttl 10s }` vs `cache 10s`
+    if let Some(arg) = dir.args.first() {
+        if let Some(secs) = parse_duration_secs(arg) {
+            ttl_secs = secs;
+        }
+    }
+
+    Ok(serde_json::json!({
+        "cache_name": cache_name,
+        "ttl": { "secs": ttl_secs, "nanos": 0 },
+        "stale": { "secs": stale_secs, "nanos": 0 },
+        "allowed_http_verbs": allowed_http_verbs,
+        "allowed_additional_status_codes": allowed_additional_status_codes,
+        "default_cache_control": default_cache_control,
+        "max_cacheable_body_bytes": max_cacheable_body_bytes,
+        "mode": mode,
+        "regex_exclude": regex_exclude,
+        "key": {
+            "disable_body": disable_body,
+            "disable_host": disable_host,
+            "disable_method": disable_method,
+            "disable_query": disable_query,
+            "disable_scheme": disable_scheme,
+            "sort_query": sort_query,
+            "hash": key_hash,
+            "hide": key_hide,
+            "headers": key_headers,
+        },
+        "cache_keys": cache_keys_rules,
+        "storage": {
+            "in_memory": storage_path.is_none() && redis_url.is_none(),
+            "path": storage_path,
+            "redis_url": redis_url,
+        },
+        "headers": headers,
+    }))
 }
 
 fn merge_matcher_set(dst: &mut MatcherSet, src: &MatcherSet) {
