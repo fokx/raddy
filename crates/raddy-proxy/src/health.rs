@@ -12,12 +12,18 @@ pub struct PassiveHealthConfig {
     pub unhealthy_status_codes: Vec<u16>,
 }
 
+impl PassiveHealthConfig {
+    pub fn is_enabled(&self) -> bool {
+        self.fail_duration_secs > 0
+    }
+}
+
 impl Default for PassiveHealthConfig {
     fn default() -> Self {
         Self {
-            max_fails: 3,
-            fail_duration_secs: 30,
-            unhealthy_status_codes: vec![500, 502, 503, 504],
+            max_fails: 1,
+            fail_duration_secs: 0,
+            unhealthy_status_codes: Vec::new(),
         }
     }
 }

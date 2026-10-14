@@ -994,6 +994,10 @@ impl Adapter {
                 let mut header_up = HashMap::new();
                 let mut header_down = HashMap::new();
                 let mut transport_tls: Option<serde_json::Value> = None;
+                let mut fail_duration = None;
+                let mut max_fails = None;
+                let mut unhealthy_status = Vec::new();
+                let mut retries = None;
 
                 if let Some(ref block) = dir.block {
                     for sub in block {
@@ -1009,6 +1013,30 @@ impl Adapter {
                             "lb_policy" => {
                                 if let Some(pol) = sub.args.first() {
                                     lb_policy = pol.clone();
+                                }
+                            }
+                            "fail_duration" => {
+                                fail_duration = sub.args.first().cloned();
+                            }
+                            "max_fails" => {
+                                if let Some(arg) = sub.args.first() {
+                                    if let Ok(n) = arg.parse::<usize>() {
+                                        max_fails = Some(n);
+                                    }
+                                }
+                            }
+                            "unhealthy_status" => {
+                                for arg in &sub.args {
+                                    if let Ok(code) = arg.parse::<u16>() {
+                                        unhealthy_status.push(code);
+                                    }
+                                }
+                            }
+                            "retries" | "lb_retries" => {
+                                if let Some(arg) = sub.args.first() {
+                                    if let Ok(n) = arg.parse::<usize>() {
+                                        retries = Some(n);
+                                    }
                                 }
                             }
                             "header_up" => {
@@ -1074,6 +1102,18 @@ impl Adapter {
                             "response": { "set": header_down }
                         }),
                     );
+                if let Some(fd) = fail_duration {
+                    cfg = cfg.with_field("fail_duration", fd);
+                }
+                if let Some(mf) = max_fails {
+                    cfg = cfg.with_field("max_fails", mf);
+                }
+                if !unhealthy_status.is_empty() {
+                    cfg = cfg.with_field("unhealthy_status", unhealthy_status);
+                }
+                if let Some(r) = retries {
+                    cfg = cfg.with_field("retries", r);
+                }
                 if let Some(tls) = transport_tls {
                     cfg = cfg.with_field(
                         "transport",

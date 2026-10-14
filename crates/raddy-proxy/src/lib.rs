@@ -132,7 +132,72 @@ pub fn build_reverse_proxy_from_config(
         transport.tls = true;
     }
 
-    let handler =
-        ReverseProxyHandler::new(upstreams, load_balancer, mutator).with_transport(transport);
+    // 5. Parse retries
+    let retries = details
+        .get("retries")
+        .or_else(|| details.get("lb_retries"))
+        .or_else(|| {
+            details
+                .get("load_balancing")
+                .and_then(|v| v.get("retries"))
+        })
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0) as usize;
+
+    // 6. Parse passive health check
+    let passive_obj = details
+        .get("health_checks")
+        .and_then(|v| v.get("passive"))
+        .and_then(|v| v.as_object());
+
+    let fail_duration_val = details
+        .get("fail_duration")
+        .or_else(|| passive_obj.and_then(|p| p.get("fail_duration")));
+
+    let fail_duration_secs = if let Some(v) = fail_duration_val {
+        if let Some(s) = v.as_str() {
+            crate::transport::parse_duration(s)
+                .map(|d| d.as_secs())
+                .unwrap_or(0)
+        } else if let Some(n) = v.as_u64() {
+            if n > 1_000_000_000 {
+                n / 1_000_000_000
+            } else {
+                n
+            }
+        } else {
+            0
+        }
+    } else {
+        0
+    };
+
+    let max_fails = details
+        .get("max_fails")
+        .or_else(|| passive_obj.and_then(|p| p.get("max_fails")))
+        .and_then(|v| v.as_u64())
+        .unwrap_or(1) as usize;
+
+    let unhealthy_status_codes: Vec<u16> = details
+        .get("unhealthy_status")
+        .or_else(|| passive_obj.and_then(|p| p.get("unhealthy_status")))
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|item| item.as_u64().map(|c| c as u16))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let passive_health = crate::health::PassiveHealthConfig {
+        max_fails,
+        fail_duration_secs,
+        unhealthy_status_codes,
+    };
+
+    let handler = ReverseProxyHandler::new(upstreams, load_balancer, mutator)
+        .with_transport(transport)
+        .with_retries(retries)
+        .with_passive_health(passive_health);
     Ok(handler)
 }

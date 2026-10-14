@@ -393,3 +393,93 @@ async fn test_reverse_proxy_x_forwarded_host_placeholder_fallback() {
 
     let _ = shutdown_tx.send(true);
 }
+
+#[tokio::test]
+async fn test_reverse_proxy_app_restart_no_503_lockout() {
+    use hyper_util::rt::{TokioExecutor, TokioIo};
+    use hyper_util::server::conn::auto::Builder;
+    use tokio::net::TcpListener;
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+
+    let (shutdown_tx, mut shutdown_rx) = tokio::sync::watch::channel(false);
+    let srv_handle = tokio::spawn(async move {
+        loop {
+            tokio::select! {
+                res = listener.accept() => {
+                    if let Ok((stream, _)) = res {
+                        let io = TokioIo::new(stream);
+                        tokio::spawn(async move {
+                            let service = hyper::service::service_fn(|_| async move {
+                                let resp = http::Response::new(http_body_util::Full::new(Bytes::from("App alive")));
+                                Ok::<_, std::convert::Infallible>(resp)
+                            });
+                            let _ = Builder::new(TokioExecutor::new()).serve_connection_with_upgrades(io, service).await;
+                        });
+                    }
+                }
+                _ = shutdown_rx.changed() => {
+                    break;
+                }
+            }
+        }
+    });
+
+    // Default reverse proxy handler (as built for reverse_proxy in Caddyfile)
+    let upstream = Arc::new(Upstream::new(addr.to_string()));
+    let handler = ReverseProxyHandler::new(vec![upstream.clone()], Box::new(First), HeaderMutator::new());
+
+    // 1. App is initially alive: 200 OK
+    let mut ctx = Context::new(Method::GET, Uri::from_static("/"), HeaderMap::new(), Bytes::new());
+    handler.handle(&mut ctx).await.expect("Proxy failed");
+    assert_eq!(ctx.status, Some(StatusCode::OK));
+
+    // 2. App restarts: shut down the mock server
+    let _ = shutdown_tx.send(true);
+    let _ = srv_handle.await;
+
+    // Send request while app is restarting: should return 502 Bad Gateway (NOT 503!)
+    let mut ctx_during_restart = Context::new(Method::GET, Uri::from_static("/"), HeaderMap::new(), Bytes::new());
+    handler.handle(&mut ctx_during_restart).await.expect("Proxy should complete");
+    assert_eq!(ctx_during_restart.status, Some(StatusCode::BAD_GATEWAY));
+    assert!(
+        upstream.is_available(),
+        "Upstream should still be available because passive health check is off by default"
+    );
+
+    // 3. App finishes restarting: re-bind to the exact same address
+    let listener2 = TcpListener::bind(addr).await.unwrap();
+    let (shutdown_tx2, mut shutdown_rx2) = tokio::sync::watch::channel(false);
+    tokio::spawn(async move {
+        loop {
+            tokio::select! {
+                res = listener2.accept() => {
+                    if let Ok((stream, _)) = res {
+                        let io = TokioIo::new(stream);
+                        tokio::spawn(async move {
+                            let service = hyper::service::service_fn(|_| async move {
+                                let resp = http::Response::new(http_body_util::Full::new(Bytes::from("App alive after restart")));
+                                Ok::<_, std::convert::Infallible>(resp)
+                            });
+                            let _ = Builder::new(TokioExecutor::new()).serve_connection_with_upgrades(io, service).await;
+                        });
+                    }
+                }
+                _ = shutdown_rx2.changed() => {
+                    break;
+                }
+            }
+        }
+    });
+
+    // User refreshes page: request must succeed with 200 OK, NOT 503 No healthy upstreams!
+    let mut ctx_after_restart = Context::new(Method::GET, Uri::from_static("/"), HeaderMap::new(), Bytes::new());
+    handler.handle(&mut ctx_after_restart).await.expect("Proxy failed");
+    assert_eq!(ctx_after_restart.status, Some(StatusCode::OK));
+    let body = String::from_utf8_lossy(ctx_after_restart.response_body.as_ref().unwrap());
+    assert_eq!(body, "App alive after restart");
+
+    let _ = shutdown_tx2.send(true);
+}
+

@@ -602,3 +602,51 @@ fn test_import_directive_nested_and_glob() {
     assert!(has_sub_header, "Missing nested X-Sub header");
 }
 
+#[test]
+fn test_reverse_proxy_passive_health_and_retries_adaptation() {
+    let input = r#"
+:8080 {
+    reverse_proxy 127.0.0.1:3000 {
+        fail_duration 15s
+        max_fails 2
+        unhealthy_status 502 503
+        retries 3
+    }
+}
+"#;
+
+    let config = adapt_caddyfile(input, ".").expect("Failed to adapt caddyfile");
+    let http = config.http_app().expect("Missing http app");
+    let srv = http.servers.get("srv_:8080").expect("Missing srv_:8080");
+
+    let rp_handler = srv
+        .routes
+        .iter()
+        .flat_map(|r| &r.handle)
+        .find(|h| h.handler == "reverse_proxy")
+        .expect("Missing reverse_proxy handler");
+
+    assert_eq!(
+        rp_handler.details.get("fail_duration").and_then(|v| v.as_str()),
+        Some("15s")
+    );
+    assert_eq!(
+        rp_handler.details.get("max_fails").and_then(|v| v.as_u64()),
+        Some(2)
+    );
+    assert_eq!(
+        rp_handler.details.get("retries").and_then(|v| v.as_u64()),
+        Some(3)
+    );
+    let status_codes: Vec<u64> = rp_handler
+        .details
+        .get("unhealthy_status")
+        .and_then(|v| v.as_array())
+        .unwrap()
+        .iter()
+        .map(|v| v.as_u64().unwrap())
+        .collect();
+    assert_eq!(status_codes, vec![502, 503]);
+}
+
+

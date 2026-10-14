@@ -32,7 +32,7 @@ impl ReverseProxyHandler {
             mutator,
             transport: HttpTransport::new(),
             passive_health: PassiveHealthConfig::default(),
-            retries: 2,
+            retries: 0,
         }
     }
 
@@ -78,18 +78,23 @@ impl Handler for ReverseProxyHandler {
             let upstream = if !candidates.is_empty() {
                 self.load_balancer.select(&candidates, ctx).cloned()
             } else {
-                self.load_balancer.select(&self.upstreams, ctx).cloned()
+                None
             };
 
             let upstream = match upstream {
                 Some(u) => u,
                 None => {
-                    tracing::warn!("No healthy upstreams available for reverse proxy");
-                    ctx.set_response(
-                        StatusCode::SERVICE_UNAVAILABLE,
-                        "503 Service Unavailable: No healthy upstreams\n",
-                    );
-                    return Ok(());
+                    if attempt == 0 {
+                        tracing::warn!("No healthy upstreams available for reverse proxy");
+                        ctx.set_response(
+                            StatusCode::SERVICE_UNAVAILABLE,
+                            "503 Service Unavailable: No healthy upstreams\n",
+                        );
+                        return Ok(());
+                    } else {
+                        // All available upstreams have already been tried in this request
+                        break;
+                    }
                 }
             };
 
@@ -138,10 +143,11 @@ impl Handler for ReverseProxyHandler {
             match result {
                 Ok((status, mut resp_headers, body)) => {
                     // Check if status is considered unhealthy
-                    if self
-                        .passive_health
-                        .unhealthy_status_codes
-                        .contains(&status.as_u16())
+                    if self.passive_health.is_enabled()
+                        && self
+                            .passive_health
+                            .unhealthy_status_codes
+                            .contains(&status.as_u16())
                     {
                         upstream.record_failure(
                             self.passive_health.max_fails,
@@ -194,10 +200,12 @@ impl Handler for ReverseProxyHandler {
                         attempts,
                         err
                     );
-                    upstream.record_failure(
-                        self.passive_health.max_fails,
-                        self.passive_health.fail_duration_secs,
-                    );
+                    if self.passive_health.is_enabled() {
+                        upstream.record_failure(
+                            self.passive_health.max_fails,
+                            self.passive_health.fail_duration_secs,
+                        );
+                    }
                     last_err = Some(err);
                 }
             }

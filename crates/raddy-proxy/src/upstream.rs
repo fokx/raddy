@@ -82,6 +82,9 @@ impl Upstream {
     }
 
     pub fn record_failure(&self, max_fails: usize, fail_duration_secs: u64) {
+        if fail_duration_secs == 0 {
+            return;
+        }
         let fails = self.fail_count.fetch_add(1, Ordering::Relaxed) + 1;
         if max_fails > 0 && fails >= max_fails {
             let until = current_time_secs() + fail_duration_secs as i64;
