@@ -1,6 +1,6 @@
 [package]
 name = "raddy-l4"
-version = "0.5.0"
+version = "0.6.0"
 edition = "2024"
 license = "Apache-2.0"
 description = "Layer 4 (TCP/UDP) transport application for Raddy (caddy-l4 parity)"
@@ -10,8 +10,8 @@ keywords = ["caddy", "layer4", "l4", "proxy", "raddy"]
 categories = ["network-programming"]
 
 [dependencies]
-raddy-core = { version = "0.5.0", path = "../raddy-core" }
-raddy-tls = { version = "0.5.0", path = "../raddy-tls" }
+raddy-core = { version = "0.6.0", path = "../raddy-core" }
+raddy-tls = { version = "0.6.0", path = "../raddy-tls" }
 tokio = { version = "1", features = ["full"] }
 bytes = "1"
 serde = { version = "1", features = ["derive"] }
