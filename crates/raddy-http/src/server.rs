@@ -13,14 +13,60 @@ use crate::error::{HttpServerError, Result};
 use crate::router::{VirtualHostRouter, compile_virtual_host_router};
 use crate::service::handle_request;
 
+struct ConnTracker {
+    count: std::sync::atomic::AtomicUsize,
+    notify: tokio::sync::Notify,
+}
+
+impl ConnTracker {
+    fn new() -> Self {
+        Self {
+            count: std::sync::atomic::AtomicUsize::new(0),
+            notify: tokio::sync::Notify::new(),
+        }
+    }
+
+    fn enter(self: &Arc<Self>) -> ConnGuard {
+        self.count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        ConnGuard {
+            tracker: self.clone(),
+        }
+    }
+
+    async fn wait_zero(&self) {
+        while self.count.load(std::sync::atomic::Ordering::SeqCst) > 0 {
+            self.notify.notified().await;
+        }
+    }
+}
+
+struct ConnGuard {
+    tracker: Arc<ConnTracker>,
+}
+
+impl Drop for ConnGuard {
+    fn drop(&mut self) {
+        if self
+            .tracker
+            .count
+            .fetch_sub(1, std::sync::atomic::Ordering::SeqCst)
+            == 1
+        {
+            self.tracker.notify.notify_waiters();
+        }
+    }
+}
+
 /// A running HTTP or HTTPS server instance bound to a TCP address (and optionally a UDP address for HTTP/3).
 pub struct HttpServerInstance {
     pub name: String,
     pub listen_addr: String,
+    pub listen_addrs: Vec<String>,
     pub router: Arc<VirtualHostRouter>,
     pub tls_acceptor: Option<TlsAcceptor>,
     pub quic_server_config: Option<quinn::ServerConfig>,
     pub quic_endpoint: Option<quinn::Endpoint>,
+    pub quic_endpoints: Vec<quinn::Endpoint>,
     pub protocols: Vec<String>,
     pub alt_svc_port: Option<u16>,
     pub challenge_store: Option<raddy_tls::acme::Http01ChallengeStore>,
@@ -36,13 +82,16 @@ impl HttpServerInstance {
         listen_addr: impl Into<String>,
         router: VirtualHostRouter,
     ) -> Self {
+        let addr = listen_addr.into();
         Self {
             name: name.into(),
-            listen_addr: listen_addr.into(),
+            listen_addr: addr.clone(),
+            listen_addrs: vec![addr],
             router: Arc::new(router),
             tls_acceptor: None,
             quic_server_config: None,
             quic_endpoint: None,
+            quic_endpoints: Vec::new(),
             protocols: vec!["h1".into(), "h2".into(), "h3".into()],
             alt_svc_port: None,
             challenge_store: None,
@@ -51,6 +100,14 @@ impl HttpServerInstance {
             listeners: Vec::new(),
             local_addrs: Vec::new(),
         }
+    }
+
+    pub fn with_listen_addrs(mut self, addrs: Vec<String>) -> Self {
+        if !addrs.is_empty() {
+            self.listen_addr = addrs[0].clone();
+            self.listen_addrs = addrs;
+        }
+        self
     }
 
     pub fn with_logging(
@@ -83,99 +140,112 @@ impl HttpServerInstance {
         self
     }
 
-    /// Binds the TCP listeners (supporting dual-stack IPv4/IPv6) and UDP endpoint for HTTP/3 if configured.
+    /// Binds the TCP listeners (supporting dual-stack IPv4/IPv6) and UDP endpoints for HTTP/3 if configured.
     pub async fn bind(&mut self) -> Result<()> {
         let mut bound_listeners = Vec::new();
         let mut bound_addrs = Vec::new();
 
-        if self.listen_addr.starts_with(':') {
-            let port: u16 = self.listen_addr[1..].parse().map_err(|e| {
-                HttpServerError::Server(format!(
-                    "Invalid port in listen_addr '{}': {}",
-                    self.listen_addr, e
-                ))
-            })?;
-
-            // 1. Bind IPv4 (0.0.0.0:port)
-            let v4_addr = SocketAddr::from(([0, 0, 0, 0], port));
-            match bind_tcp_listener(v4_addr, false) {
-                Ok(l) => {
-                    let addr = l.local_addr()?;
-                    bound_addrs.push(addr);
-                    bound_listeners.push(l);
-                }
-                Err(e) => {
-                    tracing::debug!("IPv4 bind on 0.0.0.0:{} failed: {}", port, e);
-                }
-            }
-
-            // Effective port if ephemeral port (0) was specified
-            let effective_port = bound_addrs.first().map(|a| a.port()).unwrap_or(port);
-
-            // 2. Bind IPv6 ([::]:effective_port) with v6_only = true so it coexists cleanly with IPv4
-            let v6_addr = SocketAddr::from(([0u16; 8], effective_port));
-            match bind_tcp_listener(v6_addr, true) {
-                Ok(l) => {
-                    let addr = l.local_addr()?;
-                    bound_addrs.push(addr);
-                    bound_listeners.push(l);
-                }
-                Err(e) => {
-                    tracing::debug!("IPv6 bind on [::]:{} failed: {}", effective_port, e);
-                }
-            }
-
-            if bound_listeners.is_empty() {
-                return Err(HttpServerError::Server(format!(
-                    "Failed to bind any TCP listener for '{}'",
-                    self.listen_addr
-                )));
-            }
+        let addrs_to_bind = if !self.listen_addrs.is_empty() {
+            self.listen_addrs.clone()
         } else {
-            let addrs = tokio::net::lookup_host(&self.listen_addr).await?;
-            let mut last_err = None;
-            for addr in addrs {
-                match bind_tcp_listener(addr, false) {
+            vec![self.listen_addr.clone()]
+        };
+
+        for listen_spec in &addrs_to_bind {
+            if listen_spec.starts_with(':') {
+                let port: u16 = listen_spec[1..].parse().map_err(|e| {
+                    HttpServerError::Server(format!(
+                        "Invalid port in listen_addr '{}': {}",
+                        listen_spec, e
+                    ))
+                })?;
+
+                // 1. Bind IPv4 (0.0.0.0:port)
+                let v4_addr = SocketAddr::from(([0, 0, 0, 0], port));
+                match bind_tcp_listener(v4_addr, false) {
                     Ok(l) => {
-                        bound_addrs.push(l.local_addr()?);
+                        let addr = l.local_addr()?;
+                        bound_addrs.push(addr);
                         bound_listeners.push(l);
                     }
                     Err(e) => {
-                        last_err = Some(e);
+                        tracing::debug!("IPv4 bind on 0.0.0.0:{} failed: {}", port, e);
+                    }
+                }
+
+                // Effective port if ephemeral port (0) was specified
+                let effective_port = bound_addrs.last().map(|a| a.port()).unwrap_or(port);
+
+                // 2. Bind IPv6 ([::]:effective_port) with v6_only = true so it coexists cleanly with IPv4
+                let v6_addr = SocketAddr::from(([0u16; 8], effective_port));
+                match bind_tcp_listener(v6_addr, true) {
+                    Ok(l) => {
+                        let addr = l.local_addr()?;
+                        bound_addrs.push(addr);
+                        bound_listeners.push(l);
+                    }
+                    Err(e) => {
+                        tracing::debug!("IPv6 bind on [::]:{} failed: {}", effective_port, e);
+                    }
+                }
+            } else {
+                let addrs = tokio::net::lookup_host(listen_spec).await?;
+                let mut bound_any = false;
+                let mut last_err = None;
+                for addr in addrs {
+                    let v6_only = addr.is_ipv6();
+                    match bind_tcp_listener(addr, v6_only) {
+                        Ok(l) => {
+                            bound_addrs.push(l.local_addr()?);
+                            bound_listeners.push(l);
+                            bound_any = true;
+                        }
+                        Err(e) => {
+                            last_err = Some(e);
+                        }
+                    }
+                }
+                if !bound_any {
+                    if let Some(err) = last_err {
+                        return Err(err);
                     }
                 }
             }
-            if bound_listeners.is_empty() {
-                return Err(last_err.unwrap_or_else(|| {
-                    HttpServerError::Server(format!(
-                        "Failed to resolve address: {}",
-                        self.listen_addr
-                    ))
-                }));
-            }
+        }
+
+        if bound_listeners.is_empty() {
+            return Err(HttpServerError::Server(format!(
+                "Failed to bind any TCP listener for '{}'",
+                self.listen_addr
+            )));
         }
 
         self.listeners = bound_listeners;
         self.local_addrs = bound_addrs.clone();
 
-        // Bind QUIC UDP endpoint on the primary bound address if TLS and h3 are enabled
+        // Bind QUIC UDP endpoints for all bound addresses if TLS and h3 are enabled
         if self.tls_acceptor.is_some() && self.protocols.iter().any(|p| p == "h3") {
             if let Some(quic_cfg) = self.quic_server_config.take() {
-                if let Some(&primary_addr) = self.local_addrs.first() {
-                    match quinn::Endpoint::server(quic_cfg, primary_addr) {
+                for &bound_addr in &self.local_addrs {
+                    match quinn::Endpoint::server(quic_cfg.clone(), bound_addr) {
                         Ok(ep) => {
                             tracing::info!(
                                 "Server '{}' [HTTP/3 QUIC] successfully bound to UDP {}",
                                 self.name,
-                                primary_addr
+                                bound_addr
                             );
-                            self.quic_endpoint = Some(ep);
-                            self.alt_svc_port = Some(primary_addr.port());
+                            if self.quic_endpoint.is_none() {
+                                self.quic_endpoint = Some(ep.clone());
+                            }
+                            self.quic_endpoints.push(ep);
+                            if self.alt_svc_port.is_none() {
+                                self.alt_svc_port = Some(bound_addr.port());
+                            }
                         }
                         Err(e) => {
                             tracing::warn!(
                                 "Failed to bind QUIC endpoint on UDP {}: {}",
-                                primary_addr,
+                                bound_addr,
                                 e
                             );
                         }
@@ -185,7 +255,7 @@ impl HttpServerInstance {
         }
 
         let proto = if self.tls_acceptor.is_some() {
-            if self.quic_endpoint.is_some() {
+            if !self.quic_endpoints.is_empty() || self.quic_endpoint.is_some() {
                 "HTTPS (HTTP/1.1, HTTP/2, HTTP/3)"
             } else {
                 "HTTPS (HTTP/1.1, HTTP/2)"
@@ -230,10 +300,10 @@ impl HttpServerInstance {
         let challenge_store = self.challenge_store.clone();
         let auto_builder = Builder::new(TokioExecutor::new());
         let alt_svc_port = self.alt_svc_port;
-        let quic_endpoint = self.quic_endpoint;
         let log_pipeline = self.log_pipeline.clone();
         let server_logs = self.server_logs.clone();
 
+        let tracker = Arc::new(ConnTracker::new());
         let mut set = tokio::task::JoinSet::new();
 
         for listener in listeners {
@@ -246,6 +316,7 @@ impl HttpServerInstance {
             let server_logs_clone = server_logs.clone();
             let mut conn_shutdown_rx = shutdown_rx.clone();
             let listen_addr_str = self.listen_addr.clone();
+            let tracker_task = tracker.clone();
 
             set.spawn(async move {
                 loop {
@@ -260,8 +331,10 @@ impl HttpServerInstance {
                                     let log_pipe_task = log_pipeline_clone.clone();
                                     let srv_logs_task = server_logs_clone.clone();
                                     let mut per_conn_shutdown_rx = conn_shutdown_rx.clone();
+                                    let guard = tracker_task.enter();
 
                                     tokio::spawn(async move {
+                                        let _guard = guard;
                                         if let Some(acceptor) = acceptor_task {
                                             // TLS handshake (HTTP/1.1 or HTTP/2)
                                             let tls_stream = match acceptor.accept(tcp_stream).await {
@@ -357,37 +430,60 @@ impl HttpServerInstance {
             });
         }
 
-        loop {
-            tokio::select! {
-                Some(incoming) = async {
-                    if let Some(ref ep) = quic_endpoint {
-                        ep.accept().await
-                    } else {
-                        std::future::pending().await
-                    }
-                } => {
-                    let router_clone = router.clone();
-                    let lp = log_pipeline.clone();
-                    let sl = server_logs.clone();
-                    tokio::spawn(async move {
-                        match incoming.await {
-                            Ok(conn) => {
-                                let remote = conn.remote_address();
-                                if let Err(e) = crate::http3::serve_h3_connection(conn, remote, router_clone, lp, sl).await {
-                                    tracing::debug!("H3 connection error from {}: {}", remote, e);
+        let quic_endpoints = if !self.quic_endpoints.is_empty() {
+            std::mem::take(&mut self.quic_endpoints)
+        } else if let Some(ep) = self.quic_endpoint.take() {
+            vec![ep]
+        } else {
+            Vec::new()
+        };
+
+        let mut quic_set = tokio::task::JoinSet::new();
+        for ep in quic_endpoints.clone() {
+            let router_clone = router.clone();
+            let lp = log_pipeline.clone();
+            let sl = server_logs.clone();
+            let mut ep_shutdown_rx = shutdown_rx.clone();
+            let tracker_clone = tracker.clone();
+            quic_set.spawn(async move {
+                loop {
+                    tokio::select! {
+                        Some(incoming) = ep.accept() => {
+                            let router_task = router_clone.clone();
+                            let lp_task = lp.clone();
+                            let sl_task = sl.clone();
+                            let guard = tracker_clone.enter();
+                            tokio::spawn(async move {
+                                let _guard = guard;
+                                match incoming.await {
+                                    Ok(conn) => {
+                                        let remote = conn.remote_address();
+                                        if let Err(e) = crate::http3::serve_h3_connection(conn, remote, router_task, lp_task, sl_task).await {
+                                            tracing::debug!("H3 connection error from {}: {}", remote, e);
+                                        }
+                                    }
+                                    Err(e) => {
+                                        tracing::debug!("QUIC handshake failed: {}", e);
+                                    }
                                 }
-                            }
-                            Err(e) => {
-                                tracing::debug!("QUIC handshake failed: {}", e);
+                            });
+                        }
+                        _ = ep_shutdown_rx.changed() => {
+                            if *ep_shutdown_rx.borrow() {
+                                break;
                             }
                         }
-                    });
+                    }
                 }
+            });
+        }
 
+        loop {
+            tokio::select! {
                 _ = shutdown_rx.changed() => {
                     if *shutdown_rx.borrow() {
                         tracing::info!("Server '{}' on {} shutting down gracefully", self.name, self.listen_addr);
-                        if let Some(ep) = quic_endpoint {
+                        for ep in &quic_endpoints {
                             ep.close(0u32.into(), b"server shutdown");
                         }
                         break;
@@ -401,6 +497,15 @@ impl HttpServerInstance {
                 tracing::error!("TCP accept task join error: {}", e);
             }
         }
+
+        while let Some(res) = quic_set.join_next().await {
+            if let Err(e) = res {
+                tracing::error!("QUIC accept task join error: {}", e);
+            }
+        }
+
+        // Wait for all in-flight connections to complete (eternal grace period)
+        tracker.wait_zero().await;
 
         Ok(())
     }
@@ -449,19 +554,20 @@ impl ServerManager {
         if let Some(http) = config.http_app() {
             for (name, srv_cfg) in &http.servers {
                 let vhost_router = compile_virtual_host_router(srv_cfg, registry)?;
-                let listen_addr = srv_cfg
-                    .listen
+                let listen_addrs = srv_cfg.listen.clone();
+                let listen_addr = listen_addrs
                     .first()
                     .cloned()
                     .unwrap_or_else(|| ":80".into());
-                let is_tls =
-                    listen_addr.ends_with(":443") || srv_cfg.tls_connection_policies.is_some();
+                let is_tls = listen_addrs.iter().any(|l| l.ends_with(":443"))
+                    || srv_cfg.tls_connection_policies.is_some();
                 let protocols = srv_cfg
                     .protocols
                     .clone()
                     .unwrap_or_else(|| vec!["h1".into(), "h2".into(), "h3".into()]);
 
                 let mut instance = HttpServerInstance::new(name, listen_addr, vhost_router)
+                    .with_listen_addrs(listen_addrs)
                     .with_protocols(protocols)
                     .with_logging(log_pipeline.clone(), srv_cfg.logs.clone());
 

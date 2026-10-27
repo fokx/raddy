@@ -134,7 +134,7 @@ async fn test_live_reverse_proxy_end_to_end() {
     use tokio::net::TcpListener;
 
     // 1. Start a mock backend server
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let backend_addr = listener.local_addr().unwrap();
 
     let (shutdown_tx, mut shutdown_rx) = tokio::sync::watch::channel(false);
@@ -205,7 +205,7 @@ async fn test_reverse_proxy_failover_and_retries() {
     let dead_upstream = Arc::new(Upstream::new("127.0.0.1:1")); // Port 1 won't be listening
 
     // Upstream 2: live mock backend server
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let live_addr = listener.local_addr().unwrap();
 
     let (shutdown_tx, mut shutdown_rx) = tokio::sync::watch::channel(false);
@@ -265,7 +265,7 @@ async fn test_reverse_proxy_forwards_host_from_uri_authority_when_host_header_mi
     use hyper_util::server::conn::auto::Builder;
     use tokio::net::TcpListener;
 
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let backend_addr = listener.local_addr().unwrap();
 
     let received_host = Arc::new(tokio::sync::Mutex::new(String::new()));
@@ -329,7 +329,7 @@ async fn test_reverse_proxy_x_forwarded_host_placeholder_fallback() {
     use hyper_util::server::conn::auto::Builder;
     use tokio::net::TcpListener;
 
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let backend_addr = listener.local_addr().unwrap();
 
     let received_xfh = Arc::new(tokio::sync::Mutex::new(String::new()));
@@ -400,7 +400,7 @@ async fn test_reverse_proxy_app_restart_no_503_lockout() {
     use hyper_util::server::conn::auto::Builder;
     use tokio::net::TcpListener;
 
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
 
     let (shutdown_tx, mut shutdown_rx) = tokio::sync::watch::channel(false);
@@ -482,4 +482,82 @@ async fn test_reverse_proxy_app_restart_no_503_lockout() {
 
     let _ = shutdown_tx2.send(true);
 }
+
+#[tokio::test]
+async fn test_multiple_cookies_and_via_header_forwarding() {
+    use hyper_util::rt::{TokioExecutor, TokioIo};
+    use hyper_util::server::conn::auto::Builder;
+    use std::sync::Mutex;
+
+    let received_cookie = Arc::new(Mutex::new(String::new()));
+    let received_via = Arc::new(Mutex::new(String::new()));
+    let cookie_clone = received_cookie.clone();
+    let via_clone = received_via.clone();
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+
+    let (shutdown_tx, mut shutdown_rx) = tokio::sync::watch::channel(false);
+    tokio::spawn(async move {
+        loop {
+            tokio::select! {
+                res = listener.accept() => {
+                    if let Ok((stream, _)) = res {
+                        let c_clone = cookie_clone.clone();
+                        let v_clone = via_clone.clone();
+                        let io = TokioIo::new(stream);
+                        tokio::spawn(async move {
+                            let service = hyper::service::service_fn(move |req: http::Request<hyper::body::Incoming>| {
+                                let c = c_clone.clone();
+                                let v = v_clone.clone();
+                                async move {
+                                    if let Some(cookie_hdr) = req.headers().get(http::header::COOKIE) {
+                                        *c.lock().unwrap() = cookie_hdr.to_str().unwrap().to_string();
+                                    }
+                                    if let Some(via_hdr) = req.headers().get(http::header::VIA) {
+                                        *v.lock().unwrap() = via_hdr.to_str().unwrap().to_string();
+                                    }
+                                    let resp = http::Response::new(http_body_util::Full::new(Bytes::from("OK")));
+                                    Ok::<_, std::convert::Infallible>(resp)
+                                }
+                            });
+                            let _ = Builder::new(TokioExecutor::new()).serve_connection_with_upgrades(io, service).await;
+                        });
+                    }
+                }
+                _ = shutdown_rx.changed() => {
+                    break;
+                }
+            }
+        }
+    });
+
+    let mut headers = HeaderMap::new();
+    headers.append(http::header::COOKIE, HeaderValue::from_static("murmur_tts_settings=xyz"));
+    headers.append(http::header::COOKIE, HeaderValue::from_static("PARAGLIDE_LOCALE=zh"));
+    headers.append(http::header::COOKIE, HeaderValue::from_static("session=secret123"));
+
+    let mut ctx = Context::new(Method::GET, Uri::from_static("/"), headers, Bytes::new());
+    let upstream = Arc::new(Upstream::new(addr.to_string()));
+    let handler = ReverseProxyHandler::new(vec![upstream], Box::new(First), HeaderMutator::new());
+
+    handler.handle(&mut ctx).await.expect("Proxy failed");
+    assert_eq!(ctx.status, Some(StatusCode::OK));
+
+    // Backend must have received all cookies joined with '; '
+    assert_eq!(
+        *received_cookie.lock().unwrap(),
+        "murmur_tts_settings=xyz; PARAGLIDE_LOCALE=zh; session=secret123"
+    );
+    // Backend must have received Via header
+    assert_eq!(*received_via.lock().unwrap(), "1.1 Caddy");
+    // Client must have received Via header in response
+    assert_eq!(
+        ctx.response_headers.get(http::header::VIA).unwrap().to_str().unwrap(),
+        "1.1 Caddy"
+    );
+
+    let _ = shutdown_tx.send(true);
+}
+
 

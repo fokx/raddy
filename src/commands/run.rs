@@ -324,15 +324,30 @@ async fn run_server_loop(
 
     tokio::select! {
         _ = tokio::signal::ctrl_c() => {
-            tracing::info!("Received interrupt signal, initiating graceful shutdown...");
+            tracing::info!(signal = "SIGINT", "shutting down");
+            tracing::warn!(signal = "SIGINT", "exiting; byeee!! 👋");
+            tracing::info!("http servers shutting down with eternal grace period");
+
+            let _ = admin_shutdown_tx.send(true);
+            state.stop_servers();
+
+            tokio::select! {
+                _ = tokio::signal::ctrl_c() => {
+                    tracing::warn!(signal = "SIGINT", "force quit");
+                    std::process::exit(1);
+                }
+                _ = state.wait_for_servers() => {
+                    // Graceful shutdown completed
+                }
+            }
         }
         _ = state.exit_notify.notified() => {
             tracing::info!("Received stop signal via Admin API, exiting...");
+            let _ = admin_shutdown_tx.send(true);
+            state.stop_all();
+            state.wait_for_servers().await;
         }
     }
-
-    let _ = admin_shutdown_tx.send(true);
-    state.stop_all();
 
     if let Some(task) = admin_task {
         let _ = task.await;

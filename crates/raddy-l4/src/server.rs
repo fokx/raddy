@@ -343,16 +343,26 @@ impl Layer4Manager {
         Ok(())
     }
 
-    pub fn spawn_all_detached(self) -> watch::Sender<bool> {
+    pub fn spawn_all(self) -> (tokio::task::JoinSet<Result<()>>, watch::Sender<bool>) {
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        let mut join_set = tokio::task::JoinSet::new();
         for server in self.servers {
             let rx = shutdown_rx.clone();
-            tokio::spawn(async move {
-                if let Err(e) = server.run(rx).await {
+            join_set.spawn(async move { server.run(rx).await });
+        }
+        (join_set, shutdown_tx)
+    }
+
+    pub fn spawn_all_detached(self) -> watch::Sender<bool> {
+        let (join_set, shutdown_tx) = self.spawn_all();
+        tokio::spawn(async move {
+            let mut set = join_set;
+            while let Some(res) = set.join_next().await {
+                if let Err(e) = res {
                     tracing::error!("Layer 4 server error: {}", e);
                 }
-            });
-        }
+            }
+        });
         shutdown_tx
     }
 }

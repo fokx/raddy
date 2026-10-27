@@ -4,7 +4,7 @@ use crate::load_balancer::LoadBalancer;
 use crate::transport::HttpTransport;
 use crate::upstream::Upstream;
 use async_trait::async_trait;
-use http::StatusCode;
+use http::{HeaderValue, StatusCode};
 use raddy_core::context::Context;
 use raddy_core::error::Result;
 use raddy_core::handler::Handler;
@@ -125,6 +125,7 @@ impl Handler for ReverseProxyHandler {
             // 3. Mutate request headers (header_up + X-Forwarded-*)
             let mut req_headers = ctx.headers.clone();
             self.mutator.apply_header_up(&mut req_headers, ctx);
+            req_headers.append(http::header::VIA, HeaderValue::from_static("1.1 Caddy"));
 
             // 4. Send request to upstream
             let dial = upstream.dial.clone();
@@ -174,6 +175,7 @@ impl Handler for ReverseProxyHandler {
 
                     // 6. Mutate response headers (header_down)
                     self.mutator.apply_header_down(&mut resp_headers, ctx);
+                    resp_headers.append(http::header::VIA, HeaderValue::from_static("1.1 Caddy"));
 
                     // 7. Write final response to context
                     ctx.status = Some(status);

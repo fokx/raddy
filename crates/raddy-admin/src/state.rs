@@ -18,6 +18,8 @@ pub struct AppState {
     pub active_shutdown: Arc<Mutex<Option<watch::Sender<bool>>>>,
     pub active_l4_shutdown: Arc<Mutex<Option<watch::Sender<bool>>>>,
     pub admin_shutdown: Arc<Mutex<Option<watch::Sender<bool>>>>,
+    pub http_server_handle: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
+    pub l4_server_handle: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
     pub exit_notify: Arc<tokio::sync::Notify>,
 }
 
@@ -34,6 +36,8 @@ impl AppState {
             active_shutdown: Arc::new(Mutex::new(None)),
             active_l4_shutdown: Arc::new(Mutex::new(None)),
             admin_shutdown: Arc::new(Mutex::new(None)),
+            http_server_handle: Arc::new(Mutex::new(None)),
+            l4_server_handle: Arc::new(Mutex::new(None)),
             exit_notify: Arc::new(tokio::sync::Notify::new()),
         }
     }
@@ -76,9 +80,19 @@ impl AppState {
                 let _ = old_tx.send(true);
             }
 
-            // Spawn new HTTP servers detached
-            let new_shutdown_tx = server_manager.spawn_all_detached();
+            let (join_set, new_shutdown_tx) = server_manager.spawn_all();
             *lock = Some(new_shutdown_tx);
+
+            let mut h_lock = self.http_server_handle.lock();
+            let handle = tokio::spawn(async move {
+                let mut set = join_set;
+                while let Some(res) = set.join_next().await {
+                    if let Err(e) = res {
+                        tracing::debug!("HTTP server task error: {}", e);
+                    }
+                }
+            });
+            *h_lock = Some(handle);
         }
 
         // Gracefully drain existing Layer 4 servers
@@ -88,9 +102,19 @@ impl AppState {
                 let _ = old_tx.send(true);
             }
 
-            // Spawn new Layer 4 servers detached
-            let new_l4_shutdown_tx = l4_manager.spawn_all_detached();
+            let (l4_join_set, new_l4_shutdown_tx) = l4_manager.spawn_all();
             *l4_lock = Some(new_l4_shutdown_tx);
+
+            let mut h_lock = self.l4_server_handle.lock();
+            let handle = tokio::spawn(async move {
+                let mut set = l4_join_set;
+                while let Some(res) = set.join_next().await {
+                    if let Err(e) = res {
+                        tracing::debug!("Layer 4 server task error: {}", e);
+                    }
+                }
+            });
+            *h_lock = Some(handle);
         }
 
         // Atomically swap in the new configuration
@@ -181,5 +205,24 @@ impl AppState {
             tracing::info!("Shutdown signal sent to admin server");
         }
         self.exit_notify.notify_waiters();
+    }
+
+    /// Awaits all active HTTP and Layer 4 server tasks completing their shutdown.
+    pub async fn wait_for_servers(&self) {
+        let http_handle = {
+            let mut lock = self.http_server_handle.lock();
+            lock.take()
+        };
+        let l4_handle = {
+            let mut lock = self.l4_server_handle.lock();
+            lock.take()
+        };
+
+        if let Some(h) = http_handle {
+            let _ = h.await;
+        }
+        if let Some(h) = l4_handle {
+            let _ = h.await;
+        }
     }
 }

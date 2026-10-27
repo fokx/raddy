@@ -556,7 +556,13 @@ impl Adapter {
                 };
                 site_bind_hosts
                     .iter()
-                    .map(|h| format!("{}{}", h, port_str))
+                    .map(|h| {
+                        if h.contains(':') && !h.starts_with('[') {
+                            format!("[{}]{}", h, port_str)
+                        } else {
+                            format!("{}{}", h, port_str)
+                        }
+                    })
                     .collect::<Vec<_>>()
             } else {
                 vec![parsed_addr.listen.clone()]
@@ -1954,8 +1960,12 @@ impl Adapter {
             .and_then(|a| a.disable_redirects)
             .unwrap_or(false);
 
+        if disable_redirects {
+            return;
+        }
+
         let http_server = servers
-            .entry(http_server_key)
+            .entry(http_server_key.clone())
             .or_insert_with(|| HttpServer {
                 listen: vec![http_port_str],
                 routes: Vec::new(),
@@ -1966,35 +1976,37 @@ impl Adapter {
                 errors: None,
             });
 
-        if !disable_redirects {
-            for host in https_hosts {
-                let host_already_has_route = http_server.routes.iter().any(|r| {
-                    r.r#match
-                        .as_ref()
-                        .map(|ms| {
-                            ms.iter().any(|m| {
-                                m.host
-                                    .as_ref()
-                                    .map(|hs| hs.contains(&host))
-                                    .unwrap_or(false)
-                            })
+        for host in https_hosts {
+            let host_already_has_route = http_server.routes.iter().any(|r| {
+                r.r#match
+                    .as_ref()
+                    .map(|ms| {
+                        ms.iter().any(|m| {
+                            m.host
+                                .as_ref()
+                                .map(|hs| hs.contains(&host))
+                                .unwrap_or(false)
                         })
-                        .unwrap_or(false)
-                });
+                    })
+                    .unwrap_or(false)
+            });
 
-                if !host_already_has_route {
-                    let mut redir_route = Route::default();
-                    redir_route.r#match = Some(vec![MatcherSet {
-                        host: Some(vec![host.clone()]),
-                        ..Default::default()
-                    }]);
-                    let redir_cfg = HandlerConfig::new("static_response")
-                        .with_field("status_code", 308)
-                        .with_field("location", "https://{host}{uri}");
-                    redir_route.handle = vec![redir_cfg];
-                    http_server.routes.push(redir_route);
-                }
+            if !host_already_has_route {
+                let mut redir_route = Route::default();
+                redir_route.r#match = Some(vec![MatcherSet {
+                    host: Some(vec![host.clone()]),
+                    ..Default::default()
+                }]);
+                let redir_cfg = HandlerConfig::new("static_response")
+                    .with_field("status_code", 308)
+                    .with_field("location", "https://{host}{uri}");
+                redir_route.handle = vec![redir_cfg];
+                http_server.routes.push(redir_route);
             }
+        }
+
+        if http_server.routes.is_empty() {
+            servers.remove(&http_server_key);
         }
     }
 

@@ -649,4 +649,30 @@ fn test_reverse_proxy_passive_health_and_retries_adaptation() {
     assert_eq!(status_codes, vec![502, 503]);
 }
 
+#[test]
+fn test_bind_ipv4_ipv6_and_auto_https_disable_redirects() {
+    let input = r#"
+{
+    auto_https disable_redirects
+}
+
+discourse.com:443 {
+    bind 127.0.0.1 ::1
+    tls internal
+    respond "OK"
+}
+"#;
+
+    let config = adapt_caddyfile(input, ".").expect("Failed to adapt caddyfile");
+    let http = config.http_app().expect("Missing http app");
+
+    // No port 80 listener because auto_https disable_redirects is set
+    assert!(!http.servers.contains_key("srv_:80"));
+    assert_eq!(http.servers.len(), 1);
+
+    let srv = http.servers.get("srv_127.0.0.1:443,[::1]:443").unwrap();
+    assert_eq!(srv.listen, vec!["127.0.0.1:443", "[::1]:443"]);
+}
+
+
 

@@ -82,8 +82,8 @@ impl HeaderMutator {
             let mut val_str = eval_placeholders(tmpl, ctx);
             if val_str.is_empty() && name.eq_ignore_ascii_case("x-forwarded-host") {
                 val_str = ctx
-                    .get_placeholder("hostport")
-                    .or_else(|| ctx.get_placeholder("host"))
+                    .get_placeholder("host")
+                    .or_else(|| ctx.get_placeholder("hostport"))
                     .unwrap_or_default();
             }
             if let Ok(h_name) = HeaderName::try_from(name.as_str()) {

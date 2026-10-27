@@ -503,12 +503,37 @@ impl Handler for ForwardProxyHandler {
             .uri(uri_path);
 
         let mut has_host = false;
+        let mut cookie_values: Vec<Vec<u8>> = Vec::new();
+        let mut last_name: Option<http::HeaderName> = None;
+
         for (k, v) in req_headers {
-            if let Some(name) = k {
-                if name == http::header::HOST {
-                    has_host = true;
+            let name = match k {
+                Some(n) => {
+                    last_name = Some(n.clone());
+                    n
                 }
-                req_builder = req_builder.header(name, v);
+                None => match &last_name {
+                    Some(n) => n.clone(),
+                    None => continue,
+                },
+            };
+
+            if name == http::header::COOKIE {
+                cookie_values.push(v.as_bytes().to_vec());
+                continue;
+            }
+
+            if name == http::header::HOST {
+                has_host = true;
+            }
+
+            req_builder = req_builder.header(name, v);
+        }
+
+        if !cookie_values.is_empty() {
+            let joined = cookie_values.join(&b"; "[..]);
+            if let Ok(val) = http::HeaderValue::from_bytes(&joined) {
+                req_builder = req_builder.header(http::header::COOKIE, val);
             }
         }
         if !has_host {
