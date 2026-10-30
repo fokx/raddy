@@ -1,11 +1,11 @@
 [package]
 name = "raddyserver"
-version = "0.6.0"
-edition = "2024"
-license = "Apache-2.0"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
 description = "Alias and wrapper for raddy-server, the fast, extensible web server in Rust (Caddy drop-in replacement)"
-repository = "https://github.com/fokx/raddy"
-homepage = "https://github.com/fokx/raddy"
 readme = "README.md"
 keywords = ["caddy", "web-server", "reverse-proxy", "http3", "acme"]
 categories = ["web-programming::http-server", "network-programming"]
@@ -19,6 +19,6 @@ name = "raddyserver"
 path = "src/bin/raddyserver.rs"
 
 [dependencies]
-raddy-server = { version = "0.6.0", path = "../.." }
+raddy-server = { workspace = true }
 tokio = { version = "1", features = ["full"] }
 anyhow = "1"

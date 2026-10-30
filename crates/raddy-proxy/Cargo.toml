@@ -1,16 +1,17 @@
 [package]
 name = "raddy-proxy"
-version = "0.6.0"
-edition = "2024"
-license = "Apache-2.0"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
 description = "Reverse proxy, load balancers, health checks, and forward proxy for Raddy"
-repository = "https://github.com/fokx/raddy"
 readme = "README.md"
 keywords = ["caddy", "reverse-proxy", "load-balancer", "forward-proxy", "raddy"]
 categories = ["network-programming", "web-programming::http-server"]
 
 [dependencies]
-raddy-core = { version = "0.6.0", path = "../raddy-core" }
+raddy-core = { workspace = true }
 tokio = { version = "1", features = ["full"] }
 hyper = { version = "1", features = ["full"] }
 hyper-util = { version = "0.1", features = ["full"] }

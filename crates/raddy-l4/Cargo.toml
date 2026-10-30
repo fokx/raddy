@@ -1,17 +1,18 @@
 [package]
 name = "raddy-l4"
-version = "0.6.0"
-edition = "2024"
-license = "Apache-2.0"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
 description = "Layer 4 (TCP/UDP) transport application for Raddy (caddy-l4 parity)"
-repository = "https://github.com/fokx/raddy"
 readme = "README.md"
 keywords = ["caddy", "layer4", "l4", "proxy", "raddy"]
 categories = ["network-programming"]
 
 [dependencies]
-raddy-core = { version = "0.6.0", path = "../raddy-core" }
-raddy-tls = { version = "0.6.0", path = "../raddy-tls" }
+raddy-core = { workspace = true }
+raddy-tls = { workspace = true }
 tokio = { version = "1", features = ["full"] }
 bytes = "1"
 serde = { version = "1", features = ["derive"] }

@@ -1,11 +1,11 @@
 [package]
 name = "raddy-server"
-version = "0.6.0"
-edition = "2024"
-license = "Apache-2.0"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
 description = "Fast, extensible, memory-safe web server and reverse proxy in Rust (Caddy drop-in replacement)"
-repository = "https://github.com/fokx/raddy"
-homepage = "https://github.com/fokx/raddy"
 readme = "README.md"
 keywords = ["caddy", "web-server", "reverse-proxy", "http3", "acme"]
 categories = ["web-programming::http-server", "network-programming"]
@@ -30,14 +30,31 @@ members = [
     "crates/raddy-l4",
 ]
 
+[workspace.package]
+version = "0.7.0"
+edition = "2024"
+license = "Apache-2.0"
+repository = "https://github.com/fokx/raddy"
+homepage = "https://github.com/fokx/raddy"
+
+[workspace.dependencies]
+raddy-core = { version = "0.7.0", path = "crates/raddy-core" }
+raddy-caddyfile = { version = "0.7.0", path = "crates/raddy-caddyfile" }
+raddy-http = { version = "0.7.0", path = "crates/raddy-http" }
+raddy-tls = { version = "0.7.0", path = "crates/raddy-tls" }
+raddy-proxy = { version = "0.7.0", path = "crates/raddy-proxy" }
+raddy-admin = { version = "0.7.0", path = "crates/raddy-admin" }
+raddy-l4 = { version = "0.7.0", path = "crates/raddy-l4" }
+raddy-server = { version = "0.7.0", path = "." }
+
 [dependencies]
-raddy-core = { version = "0.6.0", path = "crates/raddy-core" }
-raddy-caddyfile = { version = "0.6.0", path = "crates/raddy-caddyfile" }
-raddy-http = { version = "0.6.0", path = "crates/raddy-http" }
-raddy-tls = { version = "0.6.0", path = "crates/raddy-tls" }
-raddy-proxy = { version = "0.6.0", path = "crates/raddy-proxy" }
-raddy-admin = { version = "0.6.0", path = "crates/raddy-admin" }
-raddy-l4 = { version = "0.6.0", path = "crates/raddy-l4" }
+raddy-core = { workspace = true }
+raddy-caddyfile = { workspace = true }
+raddy-http = { workspace = true }
+raddy-tls = { workspace = true }
+raddy-proxy = { workspace = true }
+raddy-admin = { workspace = true }
+raddy-l4 = { workspace = true }
 
 tokio = { version = "1", features = ["full"] }
 clap = { version = "4", features = ["derive"] }

@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # ==============================================================================
-# Raddy Workspace Release Helper
+# Raddy Release Helper (Workspace Inheritance)
 #
 # Usage:
 #   ./scripts/release.sh patch       # 0.6.0 -> 0.6.1
@@ -26,25 +26,25 @@ if [ -n "$(git status --porcelain)" ]; then
     exit 1
 fi
 
-echo "==> Bumping workspace versions..."
+echo "==> Bumping workspace version..."
 if [[ "$TARGET" =~ ^(patch|minor|major)$ ]]; then
-    cargo set-version --bump "$TARGET" --workspace
+    cargo set-version --bump "$TARGET"
 else
-    cargo set-version "$TARGET" --workspace
+    cargo set-version "$TARGET"
 fi
 
-# Update Cargo.lock
+# Update Cargo.lock and verify compilation
 echo "==> Updating Cargo.lock..."
 cargo check --quiet
 
-# Extract new version
+# Extract new version from Cargo metadata
 NEW_VERSION=$(cargo metadata --no-deps --format-version 1 | grep -o '"version":"[^"]*"' | head -n 1 | cut -d'"' -f4)
 TAG="v${NEW_VERSION}"
 
 echo "==> New version: ${NEW_VERSION} (${TAG})"
 
 # Commit and tag
-git add Cargo.toml Cargo.lock crates/*/Cargo.toml
+git add Cargo.toml Cargo.lock
 git commit -m "chore(release): bump version to ${TAG}"
 git tag -a "${TAG}" -m "Release ${TAG}"
 

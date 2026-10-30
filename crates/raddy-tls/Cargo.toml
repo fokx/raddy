@@ -1,16 +1,17 @@
 [package]
 name = "raddy-tls"
-version = "0.6.0"
-edition = "2024"
-license = "Apache-2.0"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
 description = "Automated TLS, ACME client, local CA PKI, and SNI resolution for Raddy"
-repository = "https://github.com/fokx/raddy"
 readme = "README.md"
 keywords = ["caddy", "tls", "acme", "letsencrypt", "raddy"]
 categories = ["network-programming", "cryptography"]
 
 [dependencies]
-raddy-core = { version = "0.6.0", path = "../raddy-core" }
+raddy-core = { workspace = true }
 tokio = { version = "1", features = ["full"] }
 tokio-rustls = "0.26"
 rustls = "0.23"
