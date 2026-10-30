@@ -86,7 +86,7 @@ impl Handler for ReverseProxyHandler {
                 None => {
                     if attempt == 0 {
                         tracing::warn!("No healthy upstreams available for reverse proxy");
-                        ctx.set_response(
+                        ctx.set_error(
                             StatusCode::SERVICE_UNAVAILABLE,
                             "503 Service Unavailable: No healthy upstreams\n",
                         );
@@ -218,7 +218,7 @@ impl Handler for ReverseProxyHandler {
             .map(|e| e.to_string())
             .unwrap_or_else(|| "Bad Gateway".into());
 
-        ctx.set_response(
+        ctx.set_error(
             StatusCode::BAD_GATEWAY,
             format!("502 Bad Gateway: {}\n", err_msg),
         );

@@ -40,7 +40,7 @@ impl Handler for ErrorHandler {
         } else {
             format!("{}\n", self.message)
         };
-        ctx.set_response(self.status, msg);
+        ctx.set_error(self.status, msg);
         Ok(())
     }
 }

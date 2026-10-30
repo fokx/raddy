@@ -12,17 +12,49 @@ pub struct FileServerHandler {
     pub root: Option<String>,
     pub browse: bool,
     pub hide: Vec<String>,
+    pub status: Option<String>,
 }
 
 impl FileServerHandler {
     pub fn new(root: Option<String>, browse: bool, hide: Vec<String>) -> Self {
-        Self { root, browse, hide }
+        Self {
+            root,
+            browse,
+            hide,
+            status: None,
+        }
+    }
+
+    pub fn with_status(mut self, status: Option<String>) -> Self {
+        self.status = status;
+        self
     }
 }
 
 #[async_trait]
 impl Handler for FileServerHandler {
     async fn handle(&self, ctx: &mut Context) -> Result<()> {
+        let handle_error = |ctx: &mut Context, msg: &'static str| {
+            if ctx.in_error_pipeline {
+                ctx.set_response(StatusCode::NOT_FOUND, msg);
+            } else {
+                ctx.set_error(StatusCode::NOT_FOUND, msg);
+            }
+        };
+
+        let default_status = if let Some(ref st_str) = self.status {
+            let evaluated = raddy_core::placeholder::eval_placeholders(st_str, ctx);
+            evaluated
+                .parse::<u16>()
+                .ok()
+                .and_then(|c| StatusCode::from_u16(c).ok())
+                .unwrap_or(StatusCode::OK)
+        } else if ctx.in_error_pipeline {
+            ctx.status.unwrap_or(StatusCode::OK)
+        } else {
+            StatusCode::OK
+        };
+
         let root_str = self
             .root
             .as_deref()
@@ -46,7 +78,7 @@ impl Handler for FileServerHandler {
             if seg == ".." {
                 if sanitized_segments.pop().is_none() {
                     // Attempted to traverse above root
-                    ctx.set_response(StatusCode::NOT_FOUND, "404 Not Found\n");
+                    handle_error(ctx, "404 Not Found\n");
                     return Ok(());
                 }
             } else {
@@ -57,7 +89,7 @@ impl Handler for FileServerHandler {
         // 3. Check hidden files/directories against all segments
         for seg in &sanitized_segments {
             if self.hide.iter().any(|h| h == seg) {
-                ctx.set_response(StatusCode::NOT_FOUND, "404 Not Found\n");
+                handle_error(ctx, "404 Not Found\n");
                 return Ok(());
             }
         }
@@ -72,7 +104,7 @@ impl Handler for FileServerHandler {
         let metadata = match tokio::fs::metadata(&target_path).await {
             Ok(m) => m,
             Err(_) => {
-                ctx.set_response(StatusCode::NOT_FOUND, "404 Not Found\n");
+                handle_error(ctx, "404 Not Found\n");
                 return Ok(());
             }
         };
@@ -102,15 +134,15 @@ impl Handler for FileServerHandler {
                 .map(|m| m.is_file())
                 .unwrap_or(false)
             {
-                return serve_file(&index_file, ctx).await;
+                return serve_file(&index_file, default_status, ctx).await;
             }
 
             if self.browse {
-                return render_directory_listing(&target_path, &decoded_path, &self.hide, ctx)
+                return render_directory_listing(&target_path, &decoded_path, &self.hide, default_status, ctx)
                     .await;
             } else {
-                ctx.set_response(
-                    StatusCode::NOT_FOUND,
+                handle_error(
+                    ctx,
                     "404 Not Found: Directory index forbidden\n",
                 );
                 return Ok(());
@@ -118,10 +150,10 @@ impl Handler for FileServerHandler {
         }
 
         if metadata.is_file() {
-            return serve_file(&target_path, ctx).await;
+            return serve_file(&target_path, default_status, ctx).await;
         }
 
-        ctx.set_response(StatusCode::NOT_FOUND, "404 Not Found\n");
+        handle_error(ctx, "404 Not Found\n");
         Ok(())
     }
 }
@@ -188,11 +220,15 @@ fn parse_range(range_header: &str, file_len: u64) -> FileRange {
     }
 }
 
-async fn serve_file(file_path: &Path, ctx: &mut Context) -> Result<()> {
+async fn serve_file(file_path: &Path, default_status: StatusCode, ctx: &mut Context) -> Result<()> {
     let mut file = match tokio::fs::File::open(file_path).await {
         Ok(f) => f,
         Err(_) => {
-            ctx.set_response(StatusCode::NOT_FOUND, "404 Not Found\n");
+            if ctx.in_error_pipeline {
+                ctx.set_response(StatusCode::NOT_FOUND, "404 Not Found\n");
+            } else {
+                ctx.set_error(StatusCode::NOT_FOUND, "404 Not Found\n");
+            }
             return Ok(());
         }
     };
@@ -200,7 +236,11 @@ async fn serve_file(file_path: &Path, ctx: &mut Context) -> Result<()> {
     let metadata = match file.metadata().await {
         Ok(m) => m,
         Err(_) => {
-            ctx.set_response(StatusCode::NOT_FOUND, "404 Not Found\n");
+            if ctx.in_error_pipeline {
+                ctx.set_response(StatusCode::NOT_FOUND, "404 Not Found\n");
+            } else {
+                ctx.set_error(StatusCode::NOT_FOUND, "404 Not Found\n");
+            }
             return Ok(());
         }
     };
@@ -308,7 +348,7 @@ async fn serve_file(file_path: &Path, ctx: &mut Context) -> Result<()> {
                 ctx.response_headers
                     .insert(http::header::CONTENT_LENGTH, val);
             }
-            (StatusCode::OK, 0, file_len)
+            (default_status, 0, file_len)
         }
     };
 
@@ -371,6 +411,7 @@ async fn render_directory_listing(
     dir_path: &Path,
     req_path: &str,
     hide: &[String],
+    default_status: StatusCode,
     ctx: &mut Context,
 ) -> Result<()> {
     let mut entries = match tokio::fs::read_dir(dir_path).await {
@@ -444,6 +485,6 @@ async fn render_directory_listing(
         http::header::CONTENT_TYPE,
         HeaderValue::from_static("text/html; charset=utf-8"),
     );
-    ctx.set_response(StatusCode::OK, html);
+    ctx.set_response(default_status, html);
     Ok(())
 }

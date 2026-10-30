@@ -35,7 +35,7 @@ impl RequestBodyLimitHandler {
 impl Handler for RequestBodyLimitHandler {
     async fn handle(&self, ctx: &mut Context) -> Result<()> {
         if ctx.body.len() > self.max_size {
-            ctx.set_response(
+            ctx.set_error(
                 StatusCode::PAYLOAD_TOO_LARGE,
                 format!(
                     "413 Payload Too Large (max allowed: {} bytes)\n",

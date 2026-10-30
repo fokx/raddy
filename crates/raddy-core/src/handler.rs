@@ -160,19 +160,7 @@ impl Handler for TryFilesHandler {
             if evaluated.starts_with('=') {
                 if let Ok(code) = evaluated[1..].parse::<u16>() {
                     let status = StatusCode::from_u16(code).unwrap_or(StatusCode::NOT_FOUND);
-                    ctx.status = Some(status);
-                    ctx.set_var("err.status_code", code.to_string());
-                    ctx.set_var(
-                        "err.status_text",
-                        status.canonical_reason().unwrap_or("").to_string(),
-                    );
-                    ctx.set_var("err.message", format!("HTTP error {}", code));
-                    ctx.set_var("http.error.status_code", code.to_string());
-                    ctx.set_var(
-                        "http.error.status_text",
-                        status.canonical_reason().unwrap_or("").to_string(),
-                    );
-                    ctx.set_var("http.error.message", format!("HTTP error {}", code));
+                    ctx.set_error(status, format!("HTTP error {}", code));
                     return Ok(());
                 }
             }

@@ -32,6 +32,8 @@ pub struct Context {
     pub response_body: Option<Bytes>,
     pub response_stream: Option<BoxBodyStream>,
     pub response_written: bool,
+    pub is_error: bool,
+    pub in_error_pipeline: bool,
 
     // Logging control state
     pub log_skip: bool,
@@ -71,6 +73,8 @@ impl Context {
             response_body: None,
             response_stream: None,
             response_written: false,
+            is_error: false,
+            in_error_pipeline: false,
             log_skip: false,
             log_name: None,
             log_appends: HashMap::new(),
@@ -104,6 +108,7 @@ impl Context {
         self.response_body = Some(body.into());
         self.response_stream = None;
         self.response_written = true;
+        self.is_error = false;
     }
 
     pub fn set_response_stream<S>(&mut self, status: StatusCode, stream: S)
@@ -114,6 +119,38 @@ impl Context {
         self.response_body = None;
         self.response_stream = Some(Box::pin(stream));
         self.response_written = true;
+        self.is_error = false;
+    }
+
+    pub fn set_error(&mut self, status: StatusCode, message: impl Into<String>) {
+        let msg = message.into();
+        self.status = Some(status);
+        self.set_var("err.status_code", status.as_u16().to_string());
+        self.set_var(
+            "err.status_text",
+            status.canonical_reason().unwrap_or("").to_string(),
+        );
+        self.set_var("http.error.status_code", status.as_u16().to_string());
+        self.set_var(
+            "http.error.status_text",
+            status.canonical_reason().unwrap_or("").to_string(),
+        );
+        let err_msg = if msg.is_empty() {
+            format!("HTTP error {}", status.as_u16())
+        } else {
+            msg
+        };
+        self.set_var("err.message", &err_msg);
+        self.set_var("http.error.message", &err_msg);
+        let body_str = if err_msg.ends_with('\n') {
+            err_msg
+        } else {
+            format!("{}\n", err_msg)
+        };
+        self.response_body = Some(Bytes::from(body_str));
+        self.response_stream = None;
+        self.response_written = true;
+        self.is_error = true;
     }
 }
 
@@ -135,6 +172,8 @@ impl Clone for Context {
             response_body: self.response_body.clone(),
             response_stream: None,
             response_written: self.response_written,
+            is_error: self.is_error,
+            in_error_pipeline: self.in_error_pipeline,
             log_skip: self.log_skip,
             log_name: self.log_name.clone(),
             log_appends: self.log_appends.clone(),
@@ -162,6 +201,8 @@ impl std::fmt::Debug for Context {
             )
             .field("has_response_stream", &self.response_stream.is_some())
             .field("response_written", &self.response_written)
+            .field("is_error", &self.is_error)
+            .field("in_error_pipeline", &self.in_error_pipeline)
             .field("log_skip", &self.log_skip)
             .field("log_name", &self.log_name)
             .field("log_appends", &self.log_appends)

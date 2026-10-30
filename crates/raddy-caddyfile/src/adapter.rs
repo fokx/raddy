@@ -1136,6 +1136,7 @@ impl Adapter {
                 let mut browse = false;
                 let mut root = None;
                 let mut hide = Vec::new();
+                let mut status = None;
 
                 for arg in &dir.args {
                     if arg == "browse" {
@@ -1154,6 +1155,8 @@ impl Adapter {
                             if let Some(ref m) = sub.matcher {
                                 hide.push(m.clone());
                             }
+                        } else if sub.name == "status" {
+                            status = sub.args.first().cloned();
                         }
                     }
                 }
@@ -1164,6 +1167,9 @@ impl Adapter {
                 }
                 if !hide.is_empty() {
                     cfg = cfg.with_field("hide", hide);
+                }
+                if let Some(s) = status {
+                    cfg = cfg.with_field("status", s);
                 }
                 configs.push(cfg);
             }

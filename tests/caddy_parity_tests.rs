@@ -1137,3 +1137,118 @@ async fn test_caddyfile_maxmind_geolocation_parity() {
     assert_eq!(ctx_local2.response_body, Some(Bytes::from("Welcome")));
 }
 
+#[tokio::test]
+async fn test_reverse_proxy_404_does_not_trigger_handle_errors() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    // 1. Mock upstream returning 404
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+
+    tokio::spawn(async move {
+        while let Ok((mut stream, _)) = listener.accept().await {
+            tokio::spawn(async move {
+                let mut buf = [0u8; 1024];
+                let _ = stream.read(&mut buf).await.unwrap_or(0);
+                let resp_body = "<title>404 Not Found - upstream</title>";
+                let response = format!(
+                    "HTTP/1.1 404 Not Found\r\nContent-Length: {}\r\nContent-Type: text/html\r\nConnection: close\r\n\r\n{}",
+                    resp_body.len(),
+                    resp_body
+                );
+                let _ = stream.write_all(response.as_bytes()).await;
+            });
+        }
+    });
+
+    // 2. Caddyfile with reverse_proxy AND handle_errors
+    let caddyfile = format!(
+        r#"
+    localhost:8080 {{
+        reverse_proxy http://{}
+        handle_errors {{
+            respond "Intercepted by handle_errors" 200
+        }}
+    }}
+    "#,
+        addr
+    );
+
+    let config = adapt_caddyfile(&caddyfile, Path::new(".")).unwrap();
+    let http = config.http_app().unwrap();
+    let server = http.servers.values().next().unwrap();
+    let registry = ModuleRegistry::new();
+    let router = compile_virtual_host_router(server, &registry).unwrap();
+
+    // 3. Make request
+    let mut headers = HeaderMap::new();
+    headers.insert(header::HOST, "localhost".parse().unwrap());
+    let mut ctx = Context::new(
+        Method::GET,
+        "/arch/core/os/x86_64/core.db.sig".parse().unwrap(),
+        headers,
+        Bytes::new(),
+    );
+    ctx.remote_addr = Some("127.0.0.1:5000".parse().unwrap());
+
+    router.route_request(&mut ctx).await.unwrap();
+
+    // 4. Must NOT trigger handle_errors: upstream 404 response must be delivered directly
+    assert_eq!(ctx.status, Some(StatusCode::NOT_FOUND));
+    let body_bytes = ctx.response_body.unwrap();
+    let body_text = String::from_utf8_lossy(&body_bytes);
+    assert_eq!(body_text, "<title>404 Not Found - upstream</title>");
+}
+
+#[tokio::test]
+async fn test_handle_errors_with_file_server_preserves_error_status() {
+    let tmp_dir = tempfile::tempdir().expect("Failed to create tempdir");
+    let error_page_path = tmp_dir.path().join("404.html");
+    std::fs::write(&error_page_path, "<html>404 Custom Page</html>").unwrap();
+
+    let caddyfile = format!(
+        r#"
+    localhost:8080 {{
+        handle_errors {{
+            @404 {{
+                expression {{http.error.status_code}} == 404
+            }}
+            rewrite @404 /404.html
+            file_server {{
+                root {}
+            }}
+        }}
+        error 404 "Resource Not Found"
+    }}
+    "#,
+        tmp_dir.path().display()
+    );
+
+    let config = adapt_caddyfile(&caddyfile, Path::new(".")).unwrap();
+    let http = config.http_app().unwrap();
+    let server = http.servers.values().next().unwrap();
+    let registry = ModuleRegistry::new();
+    let router = compile_virtual_host_router(server, &registry).unwrap();
+
+    let mut headers = HeaderMap::new();
+    headers.insert(header::HOST, "localhost".parse().unwrap());
+    let mut ctx = Context::new(
+        Method::GET,
+        "/nonexistent".parse().unwrap(),
+        headers,
+        Bytes::new(),
+    );
+    ctx.remote_addr = Some("127.0.0.1:5000".parse().unwrap());
+
+    router.route_request(&mut ctx).await.unwrap();
+
+    // In Caddy, file_server inside handle_errors preserves the original 404 status code (not 200!)
+    assert_eq!(ctx.status, Some(StatusCode::NOT_FOUND));
+    assert_eq!(
+        ctx.response_body,
+        Some(Bytes::from("<html>404 Custom Page</html>"))
+    );
+}
+
+

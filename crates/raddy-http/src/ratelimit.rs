@@ -654,7 +654,7 @@ impl Handler for RateLimitHandler {
                     );
                 }
 
-                ctx.set_response(
+                ctx.set_error(
                     StatusCode::TOO_MANY_REQUESTS,
                     "429 Too Many Requests\n",
                 );

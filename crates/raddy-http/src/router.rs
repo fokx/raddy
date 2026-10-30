@@ -203,53 +203,49 @@ impl VirtualHostRouter {
                 );
             }
             true
-        } else if let Some(status) = ctx.status {
-            if status.is_client_error() || status.is_server_error() {
-                ctx.set_var("err.status_code", status.as_u16().to_string());
-                ctx.set_var(
-                    "err.status_text",
-                    status.canonical_reason().unwrap_or("").to_string(),
-                );
-                ctx.set_var("http.error.status_code", status.as_u16().to_string());
-                ctx.set_var(
-                    "http.error.status_text",
-                    status.canonical_reason().unwrap_or("").to_string(),
-                );
-                if ctx.get_var("err.message").is_none() {
-                    ctx.set_var("err.message", format!("HTTP error {}", status.as_u16()));
-                }
-                if ctx.get_var("http.error.message").is_none() {
-                    ctx.set_var(
-                        "http.error.message",
-                        format!("HTTP error {}", status.as_u16()),
-                    );
-                }
-                true
-            } else {
-                false
-            }
+        } else if ctx.is_error {
+            true
         } else {
             false
         };
 
         if needs_error_handling {
             if let Some(ref err_router) = self.error_router {
+                let error_status = ctx.status.unwrap_or(StatusCode::NOT_FOUND);
                 ctx.response_written = false;
+                ctx.is_error = false;
+                ctx.in_error_pipeline = true;
+                ctx.response_body = None;
+                ctx.response_stream = None;
+                ctx.status = Some(error_status);
+
                 err_router.handle(ctx).await?;
+
+                ctx.in_error_pipeline = false;
             }
         }
 
-        // Default 404 if no handler responded
+        // Default 404/error response if no handler responded
         if !ctx.response_written {
             let st = ctx.status.unwrap_or(StatusCode::NOT_FOUND);
-            ctx.set_response(
-                st,
-                format!(
-                    "{} {}\n",
-                    st.as_u16(),
-                    st.canonical_reason().unwrap_or("Not Found")
-                ),
-            );
+            let msg = ctx
+                .get_var("http.error.message")
+                .or_else(|| ctx.get_var("err.message"))
+                .map(|m| {
+                    if m.ends_with('\n') {
+                        m.to_string()
+                    } else {
+                        format!("{}\n", m)
+                    }
+                })
+                .unwrap_or_else(|| {
+                    format!(
+                        "{} {}\n",
+                        st.as_u16(),
+                        st.canonical_reason().unwrap_or("Not Found")
+                    )
+                });
+            ctx.set_response(st, msg);
         }
 
         if ctx.response_written {
@@ -565,7 +561,12 @@ fn compile_handler(h_cfg: &HandlerConfig, registry: &ModuleRegistry) -> Result<A
                         .collect()
                 })
                 .unwrap_or_default();
-            Ok(Arc::new(FileServerHandler::new(root, browse, hide)))
+            let status = h_cfg
+                .details
+                .get("status")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            Ok(Arc::new(FileServerHandler::new(root, browse, hide).with_status(status)))
         }
 
         "reverse_proxy" => {
