@@ -1,0 +1,75 @@
+name: Publish Docker Image to GHCR
+
+on:
+  push:
+    tags:
+      - 'v*' # Triggers whenever you push a version tag like v0.6.0
+  workflow_dispatch: # Allows manual trigger from GitHub Actions tab
+
+jobs:
+  # Optional: Publish crates to crates.io if CARGO_REGISTRY_TOKEN is provided
+  cargo-publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Publish to crates.io
+        if: env.CARGO_TOKEN != ''
+        env:
+          CARGO_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          cargo publish -p raddy-core --token "$CARGO_TOKEN" || true
+          cargo publish -p raddy-tls --token "$CARGO_TOKEN" || true
+          cargo publish -p raddy-proxy --token "$CARGO_TOKEN" || true
+          cargo publish -p raddy-caddyfile --token "$CARGO_TOKEN" || true
+          cargo publish -p raddy-http --token "$CARGO_TOKEN" || true
+          cargo publish -p raddy-l4 --token "$CARGO_TOKEN" || true
+          cargo publish -p raddy-admin --token "$CARGO_TOKEN" || true
+          cargo publish -p raddyserver --token "$CARGO_TOKEN" || true
+          cargo publish -p raddy-server --token "$CARGO_TOKEN" || true
+
+  # Build & push Docker image directly to GitHub Container Registry (ghcr.io)
+  docker-ghcr:
+    needs: [cargo-publish]
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write # Grants permission to push to ghcr.io
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry (GHCR)
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest
+
+      - name: Build and push to GHCR
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

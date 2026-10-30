@@ -1,0 +1,61 @@
+services:
+  raddy:
+    # Pull pre-built image from GHCR or build locally:
+    image: ghcr.io/fokx/raddy:latest
+    # build:
+    #   context: .
+    #   dockerfile: Dockerfile
+    container_name: raddy
+    restart: unless-stopped
+    ports:
+      # HTTP
+      - "80:80"
+      # HTTPS (TCP)
+      - "443:443"
+      # HTTP/3 QUIC (UDP) - required for native HTTP/3
+      - "443:443/udp"
+      # Admin API (bound strictly to 127.0.0.1 for security)
+      - "127.0.0.1:2019:2019"
+    environment:
+      # Log filter level (e.g. info, debug, trace)
+      - RUST_LOG=info
+      # ACME contact email for automatic SSL/TLS certificates
+      - RADDY_ACME_EMAIL=admin@example.com
+      # Enable ACME staging to avoid Let's Encrypt rate limits during testing
+      # - RADDY_ACME_STAGING=1
+      # Optional: Cloudflare DNS token for DNS-01 ACME challenges & wildcard certificates
+      # - CLOUDFLARE_API_TOKEN=your_token_here
+      # Dynamic environment variables accessible in Caddyfile via {env.UPSTREAM_HOST}
+      - UPSTREAM_HOST=upstream_app:8080
+    volumes:
+      # Mount custom Caddyfile
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # Mount static site files (accessible at /srv inside container)
+      - ./site:/srv:ro
+      # IMPORTANT: Persistent volume for Let's Encrypt certificates and keys
+      - raddy_data:/data
+      # Persistent volume for runtime configurations
+      - raddy_config:/config
+    networks:
+      - raddy_net
+
+  # --------------------------------------------------------------------------
+  # Example backend service to demonstrate reverse proxying
+  # To test: uncomment this block and set `reverse_proxy upstream_app:8080` in Caddyfile
+  # --------------------------------------------------------------------------
+  # upstream_app:
+  #   image: traefik/whoami:latest
+  #   container_name: upstream_app
+  #   restart: unless-stopped
+  #   networks:
+  #     - raddy_net
+
+volumes:
+  raddy_data:
+    name: raddy_data
+  raddy_config:
+    name: raddy_config
+
+networks:
+  raddy_net:
+    driver: bridge

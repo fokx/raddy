@@ -21,6 +21,8 @@
 - [Architecture & Crates](#architecture--crates)
 - [Documentation Chapters](#documentation-chapters)
 - [Installation & Build](#installation--build)
+  - [Build from Source](#build-from-source)
+  - [Docker & Container Deployment](#docker--container-deployment)
 - [Quick Start](#quick-start)
   - [1. Instant Static File Server](#1-instant-static-file-server)
   - [2. Reverse Proxy with Caddyfile](#2-reverse-proxy-with-caddyfile)
@@ -151,6 +153,116 @@ cargo build --release
 
 # The compiled binary will be located at:
 ./target/release/raddy --version
+```
+
+### Docker & Container Deployment
+
+Pre-built multi-architecture container images (`linux/amd64`, `linux/arm64`) are published to **GitHub Container Registry (GHCR)**:
+
+```bash
+# Pull the latest image
+docker pull ghcr.io/fokx/raddy:latest
+```
+
+#### Quick Start with Docker
+
+Run an instant container serving on HTTP (`:80`) and HTTPS (`:443` with native QUIC/HTTP/3):
+
+```bash
+docker run -d \
+  --name raddy \
+  -p 80:80 \
+  -p 443:443 \
+  -p 443:443/udp \
+  -v $(pwd)/Caddyfile:/etc/caddy/Caddyfile:ro \
+  -v raddy_data:/data \
+  -v raddy_config:/config \
+  ghcr.io/fokx/raddy:latest
+```
+
+> [!IMPORTANT]
+> Always mount a persistent volume to `/data` (`-v raddy_data:/data`). Raddy stores obtained ACME / Let's Encrypt certificates, private keys, and OCSP staples in `/data`. Persisting this volume prevents re-issuance and Let's Encrypt rate limits across container updates.
+
+#### Docker Compose
+
+Use the included [`docker-compose.yml`](docker-compose.yml) to launch Raddy with persistent storage and network isolation:
+
+```bash
+# Start Raddy in the background
+docker compose up -d
+
+# View live streaming logs
+docker compose logs -f raddy
+```
+
+#### Configuring via Environment Variables
+
+Raddy supports comprehensive environment variable configuration:
+
+1. **Server & Operational Variables**:
+   | Variable | Description | Default |
+   |---|---|---|
+   | `RUST_LOG` | Tracing filter directive (e.g. `info`, `debug`, `trace`, `warn`) | `info` |
+   | `RADDY_DEBUG` | Enable verbose debug logging for TLS, ACME, and HTTP handlers | `false` |
+   | `RADDY_DATA_DIR` | Storage path for persistent TLS certificates and ACME accounts | `/data` |
+   | `RADDY_ACME_EMAIL` | Default contact email used for ACME certificate registration | None |
+   | `RADDY_ACME_STAGING` | Set to `1` or `true` to use Let's Encrypt staging environment (avoids rate limits) | `false` |
+   | `CLOUDFLARE_API_TOKEN` | API token for automatic Cloudflare DNS-01 challenge solving (wildcards) | None |
+
+2. **Caddyfile Dynamic Substitution**:
+   Any custom environment variable passed to the container can be interpolated directly in your `Caddyfile` using `{env.VARIABLE_NAME}` syntax:
+
+   ```caddyfile
+   :80 {
+       reverse_proxy {env.BACKEND_HOST:127.0.0.1}:{env.BACKEND_PORT:8080}
+   }
+   ```
+
+   Pass variables via Docker CLI or Compose:
+   ```bash
+   docker run -d \
+     -p 80:80 \
+     -e BACKEND_HOST="api_service" \
+     -e BACKEND_PORT="3000" \
+     -v $(pwd)/Caddyfile:/etc/caddy/Caddyfile:ro \
+     ghcr.io/fokx/raddy:latest
+   ```
+
+#### Configuring via Command Line & Subcommands
+
+The Docker container sets `ENTRYPOINT ["raddy"]`, allowing you to run any Raddy CLI command directly:
+
+```bash
+# 1. Instant static file server with directory browsing
+docker run -d -p 8080:8080 -v $(pwd)/public:/srv:ro ghcr.io/fokx/raddy:latest \
+  file-server --listen 0.0.0.0:8080 --root /srv --browse
+
+# 2. Instant one-liner reverse proxy
+docker run -d -p 80:80 ghcr.io/fokx/raddy:latest \
+  reverse-proxy --from 0.0.0.0:80 --to backend-service:8080
+
+# 3. Validate Caddyfile syntax without starting the server
+docker run --rm -v $(pwd)/Caddyfile:/etc/caddy/Caddyfile:ro ghcr.io/fokx/raddy:latest \
+  validate --config /etc/caddy/Caddyfile
+
+# 4. Format a Caddyfile in place
+docker run --rm -v $(pwd):/workspace -w /workspace ghcr.io/fokx/raddy:latest \
+  fmt --overwrite Caddyfile
+
+# 5. Adapt Caddyfile to Raddy JSON configuration
+docker run --rm -v $(pwd)/Caddyfile:/etc/caddy/Caddyfile:ro ghcr.io/fokx/raddy:latest \
+  adapt --config /etc/caddy/Caddyfile --pretty
+
+# 6. Generate bcrypt password hash for basic_auth
+docker run --rm ghcr.io/fokx/raddy:latest hash-password "my-secret-password"
+```
+
+#### Zero-Downtime Hot Reload in Docker
+
+Reload configuration dynamically without dropping client connections or restarting the container:
+
+```bash
+docker exec -it raddy raddy reload --config /etc/caddy/Caddyfile
 ```
 
 ---

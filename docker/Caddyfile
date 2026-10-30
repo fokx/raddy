@@ -1,0 +1,15 @@
+# Default Raddy container Caddyfile
+#
+# Mount your custom Caddyfile to /etc/caddy/Caddyfile to override:
+#   docker run -d -p 80:80 -p 443:443 -v ./Caddyfile:/etc/caddy/Caddyfile raddy
+
+:80 {
+    # Default welcome page directory
+    root * /usr/share/caddy
+
+    # Serve static assets
+    file_server
+
+    # Log requests
+    log
+}

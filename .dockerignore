@@ -1,0 +1,9 @@
+target/
+.git/
+.github/
+.idea/
+.junie/
+docs/
+tests/
+*.md
+!README.md
