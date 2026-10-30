@@ -1,0 +1,56 @@
+name: Release Standalone Binaries
+
+on:
+  push:
+    tags:
+      - 'v*' # Triggers on any release tag (e.g. v0.6.0)
+  workflow_dispatch:
+
+permissions:
+  contents: write # Needed to create GitHub Releases and upload assets
+
+jobs:
+  release-binaries:
+    name: Build & Upload (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux 64-bit (x86_64)
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+          # Linux ARM 64-bit (aarch64 / AWS Graviton / Raspberry Pi)
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+          # macOS Apple Silicon (M1/M2/M3/M4)
+          - target: aarch64-apple-darwin
+            os: macos-14
+          # macOS Intel (x86_64)
+          - target: x86_64-apple-darwin
+            os: macos-13
+          # Windows 64-bit (x86_64)
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install Linux build dependencies
+        if: startsWith(matrix.os, 'ubuntu')
+        run: |
+          sudo apt-get update && sudo apt-get install -y cmake clang libclang-dev
+
+      - name: Build and Upload Binary to GitHub Release
+        uses: taiki-e/upload-rust-binary-action@v1
+        with:
+          bin: raddy
+          target: ${{ matrix.target }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+          include: README.md,LICENSE,Caddyfile

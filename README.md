@@ -21,6 +21,7 @@
 - [Architecture & Crates](#architecture--crates)
 - [Documentation Chapters](#documentation-chapters)
 - [Installation & Build](#installation--build)
+  - [Pre-compiled Standalone Binaries](#pre-compiled-standalone-binaries)
   - [Build from Source](#build-from-source)
   - [Docker & Container Deployment](#docker--container-deployment)
 - [Quick Start](#quick-start)
@@ -140,6 +141,18 @@ Comprehensive technical documentation and deep dives are organized into function
 ### Prerequisites
 - [Rust](https://www.rust-lang.org/tools/install) **1.85+** (Rust 2024 Edition support required)
 - `cmake` and a C/C++ compiler (for native crypto libraries like `aws-lc-sys` / `ring`)
+
+### Pre-compiled Standalone Binaries
+
+Download pre-compiled standalone executable binaries directly from the [GitHub Releases](https://github.com/fokx/raddy/releases) page:
+
+- **Linux (x86_64):** `raddy-v*.*.*-x86_64-unknown-linux-gnu.tar.gz`
+- **Linux ARM64:** `raddy-v*.*.*-aarch64-unknown-linux-gnu.tar.gz`
+- **macOS Apple Silicon (M1/M2/M3/M4):** `raddy-v*.*.*-aarch64-apple-darwin.tar.gz`
+- **macOS Intel:** `raddy-v*.*.*-x86_64-apple-darwin.tar.gz`
+- **Windows (x86_64):** `raddy-v*.*.*-x86_64-pc-windows-msvc.zip`
+
+Extract the archive and move `raddy` to your system `PATH` (e.g. `/usr/local/bin` on Linux/macOS).
 
 ### Build from Source
 
