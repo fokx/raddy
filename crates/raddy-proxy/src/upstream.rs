@@ -14,9 +14,63 @@ pub struct Upstream {
     unhealthy_until: AtomicI64,
 }
 
+fn resolve_env_string(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let mut remaining = input;
+    while let Some(start) = remaining.find('{') {
+        out.push_str(&remaining[..start]);
+        let after_brace = &remaining[start + 1..];
+        if let Some(end) = after_brace.find('}') {
+            let inner = &after_brace[..end];
+            let (is_env, var_spec) = if let Some(stripped) = inner.strip_prefix('$') {
+                (true, stripped)
+            } else if let Some(stripped) = inner.strip_prefix("env.") {
+                (true, stripped)
+            } else {
+                (false, "")
+            };
+
+            if is_env {
+                let (var_name, default_val) = if let Some((v, d)) = var_spec.split_once(':') {
+                    (v, Some(d))
+                } else {
+                    (var_spec, None)
+                };
+
+                let val = std::env::var(var_name).ok();
+                match (val, default_val) {
+                    (Some(v), Some(d)) => {
+                        if v.is_empty() {
+                            out.push_str(d);
+                        } else {
+                            out.push_str(&v);
+                        }
+                    }
+                    (Some(v), None) => out.push_str(&v),
+                    (None, Some(d)) => out.push_str(d),
+                    (None, None) => {}
+                }
+            } else {
+                out.push('{');
+                out.push_str(inner);
+                out.push('}');
+            }
+            remaining = &after_brace[end + 1..];
+        } else {
+            out.push('{');
+            remaining = after_brace;
+        }
+    }
+    out.push_str(remaining);
+    out
+}
+
 impl Upstream {
     pub fn new(dial: impl Into<String>) -> Self {
-        let raw = dial.into();
+        let mut raw = dial.into();
+        if raw.contains("{env.") || raw.contains("{$") {
+            raw = resolve_env_string(&raw);
+        }
         let target = crate::transport::parse_upstream_target(&raw, false);
         Self {
             dial: target.dial_addr,

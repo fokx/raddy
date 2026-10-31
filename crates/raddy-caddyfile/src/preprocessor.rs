@@ -1,4 +1,5 @@
 use crate::ast::*;
+use crate::env::replace_env_vars;
 use crate::error::{ParseError, ParseResult};
 use crate::lexer::Lexer;
 use crate::parser::Parser;
@@ -62,6 +63,7 @@ impl Preprocessor {
                                 e
                             ))
                         })?;
+                        let content = replace_env_vars(&content);
 
                         let tokens = Lexer::new(&content).tokenize()?;
                         let mut parser = Parser::new(tokens);
@@ -122,6 +124,7 @@ impl Preprocessor {
                             e
                         ))
                     })?;
+                    let content = replace_env_vars(&content);
 
                     let tokens = Lexer::new(&content).tokenize()?;
                     let mut parser = Parser::new(tokens);
@@ -280,6 +283,7 @@ impl Preprocessor {
                         e
                     ))
                 })?;
+                let content = replace_env_vars(&content);
 
                 let tokens = Lexer::new(&content).tokenize()?;
                 let mut parser = Parser::new(tokens);
@@ -325,6 +329,7 @@ impl Preprocessor {
                     e
                 ))
             })?;
+            let content = replace_env_vars(&content);
 
             let tokens = Lexer::new(&content).tokenize()?;
             let mut parser = Parser::new(tokens);

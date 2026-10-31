@@ -71,6 +71,30 @@ pub async fn file_server_command(
     run_server_loop(config, Path::new(""), None, false, None, false, false).await
 }
 
+async fn wait_for_shutdown_signal() -> &'static str {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{SignalKind, signal};
+        match signal(SignalKind::terminate()) {
+            Ok(mut sigterm) => {
+                tokio::select! {
+                    _ = tokio::signal::ctrl_c() => "SIGINT",
+                    _ = sigterm.recv() => "SIGTERM",
+                }
+            }
+            Err(_) => {
+                let _ = tokio::signal::ctrl_c().await;
+                "SIGINT"
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = tokio::signal::ctrl_c().await;
+        "SIGINT"
+    }
+}
+
 async fn run_server_loop(
     initial_config: Config,
     config_path: &Path,
@@ -323,17 +347,17 @@ async fn run_server_loop(
     tracing::info!("Raddy server running. Press Ctrl+C to stop.");
 
     tokio::select! {
-        _ = tokio::signal::ctrl_c() => {
-            tracing::info!(signal = "SIGINT", "shutting down");
-            tracing::warn!(signal = "SIGINT", "exiting; byeee!! 👋");
+        sig = wait_for_shutdown_signal() => {
+            tracing::info!(signal = sig, "shutting down");
+            tracing::warn!(signal = sig, "exiting; byeee!! 👋");
             tracing::info!("http servers shutting down with eternal grace period");
 
             let _ = admin_shutdown_tx.send(true);
             state.stop_servers();
 
             tokio::select! {
-                _ = tokio::signal::ctrl_c() => {
-                    tracing::warn!(signal = "SIGINT", "force quit");
+                _ = wait_for_shutdown_signal() => {
+                    tracing::warn!(signal = sig, "force quit");
                     std::process::exit(1);
                 }
                 _ = state.wait_for_servers() => {

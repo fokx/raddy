@@ -7,6 +7,7 @@ pub mod address;
 pub mod ast;
 pub mod caddyfile;
 pub mod dispenser;
+pub mod env;
 pub mod error;
 pub mod formatter;
 pub mod lexer;
@@ -17,6 +18,7 @@ pub use adapter::Adapter;
 pub use address::{Address, parse_address};
 pub use ast::Caddyfile;
 pub use dispenser::Dispenser;
+pub use env::replace_env_vars;
 pub use error::{ParseError, ParseResult};
 pub use formatter::{format_caddyfile, format_caddyfile_str};
 pub use lexer::{Lexer, Span, Token, TokenKind};
@@ -37,7 +39,8 @@ pub fn parse_caddyfile(input: &str) -> ParseResult<Caddyfile> {
 /// Parses a Caddyfile from a string, runs preprocessor expansion (snippets and relative imports),
 /// and adapts the AST into a Raddy internal `Config`.
 pub fn adapt_caddyfile(input: &str, base_dir: impl AsRef<Path>) -> ParseResult<Config> {
-    let raw_cf = parse_caddyfile(input)?;
+    let replaced_input = replace_env_vars(input);
+    let raw_cf = parse_caddyfile(&replaced_input)?;
     let mut prep = Preprocessor::new(raw_cf.snippets.clone(), base_dir);
     let expanded_cf = prep.expand_caddyfile(raw_cf)?;
     let mut adapter = Adapter::new();

@@ -19,6 +19,7 @@ pub fn load_or_adapt(path: &Path, adapter: Option<&str>) -> Result<Config> {
     if is_json {
         let content = std::fs::read_to_string(path)
             .with_context(|| format!("Failed to read JSON config at '{}'", path.display()))?;
+        let content = raddy_caddyfile::replace_env_vars(&content);
         let config: Config = serde_json::from_str(&content)
             .with_context(|| format!("Failed to parse JSON config at '{}'", path.display()))?;
         Ok(config)

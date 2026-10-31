@@ -62,6 +62,9 @@ EXPOSE 80 443 443/udp 2019
 # Persistent data volumes for TLS certificates and runtime configs
 VOLUME ["/data", "/config"]
 
+# Signal for graceful shutdown
+STOPSIGNAL SIGINT
+
 WORKDIR /srv
 
 # Default command: launch Raddy server with the default Caddyfile

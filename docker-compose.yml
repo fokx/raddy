@@ -7,6 +7,8 @@ services:
     #   dockerfile: Dockerfile
     container_name: raddy
     restart: unless-stopped
+    init: true
+    stop_signal: SIGINT
     ports:
       # HTTP
       - "80:80"

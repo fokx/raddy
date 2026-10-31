@@ -674,5 +674,29 @@ discourse.com:443 {
     assert_eq!(srv.listen, vec!["127.0.0.1:443", "[::1]:443"]);
 }
 
+#[test]
+fn test_caddyfile_reverse_proxy_env_interpolation() {
+    unsafe {
+        std::env::set_var("TEST_DOCKER_UPSTREAM", "upstream_app:80");
+    }
+
+    let input = r#"
+:80 {
+    reverse_proxy {env.TEST_DOCKER_UPSTREAM}
+}
+"#;
+
+    let config = adapt_caddyfile(input, ".").expect("Failed to adapt caddyfile with env var");
+    let http = config.http_app().expect("Missing http app");
+    let srv = http.servers.get("srv_:80").expect("Missing :80 server");
+    let route = &srv.routes[0];
+    let proxy_handle = route.handle.iter().find(|h| h.handler == "reverse_proxy").expect("Missing reverse_proxy handler");
+
+    let upstreams = proxy_handle.details.get("upstreams").and_then(|v| v.as_array()).expect("Missing upstreams");
+    let dial = upstreams[0].get("dial").and_then(|v| v.as_str()).expect("Missing dial");
+    assert_eq!(dial, "upstream_app:80");
+}
+
+
 
 
