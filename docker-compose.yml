@@ -1,14 +1,19 @@
 services:
   raddy:
-    # Pull pre-built image from GHCR or build locally:
+    # Pull pre-built image from GHCR (standard :latest or hardened :nonroot):
     image: ghcr.io/fokx/raddy:latest
+    # image: ghcr.io/fokx/raddy:nonroot
     # build:
     #   context: .
     #   dockerfile: Dockerfile
+    #   dockerfile: Dockerfile.nonroot
     container_name: raddy
     restart: unless-stopped
     init: true
     stop_signal: SIGINT
+    # Grant capability to bind to privileged ports 80/443 (required when using :nonroot image)
+    cap_add:
+      - NET_BIND_SERVICE
     ports:
       # HTTP
       - "80:80"

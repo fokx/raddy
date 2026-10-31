@@ -53,7 +53,8 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Extract Docker metadata
+      # --- Standard Debian-based Image (:latest) ---
+      - name: Extract Docker metadata (standard)
         id: meta
         uses: docker/metadata-action@v5
         with:
@@ -63,13 +64,39 @@ jobs:
             type=semver,pattern={{major}}.{{minor}}
             type=raw,value=latest
 
-      - name: Build and push to GHCR
+      - name: Build and push standard Docker image to GHCR
         uses: docker/build-push-action@v6
         with:
           context: .
+          file: Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=standard
+          cache-to: type=gha,mode=max,scope=standard
+
+      # --- Distroless Static Non-Root Image (:nonroot) ---
+      - name: Extract Docker metadata (nonroot)
+        id: meta-nonroot
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          flavor: |
+            suffix=-nonroot,onlatest=true
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=nonroot
+
+      - name: Build and push Distroless nonroot image to GHCR
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.nonroot
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta-nonroot.outputs.tags }}
+          labels: ${{ steps.meta-nonroot.outputs.labels }}
+          cache-from: type=gha,scope=nonroot
+          cache-to: type=gha,mode=max,scope=nonroot

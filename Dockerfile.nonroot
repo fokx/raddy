@@ -1,0 +1,85 @@
+# syntax=docker/dockerfile:1
+
+# ==============================================================================
+# Stage 1: Build statically linked musl binary
+# ==============================================================================
+FROM rust:bookworm AS builder
+
+# Install build dependencies for native C/crypto libraries and musl toolchain
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    cmake \
+    clang \
+    musl-tools \
+    libclang-dev \
+    make \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Detect architecture and add corresponding musl target
+RUN ARCH=$(uname -m) && \
+    case "$ARCH" in \
+        x86_64) TARGET="x86_64-unknown-linux-musl" ;; \
+        aarch64) TARGET="aarch64-unknown-linux-musl" ;; \
+        *) TARGET="x86_64-unknown-linux-musl" ;; \
+    esac && \
+    echo "$TARGET" > /target.txt && \
+    rustup target add "$TARGET"
+
+WORKDIR /usr/src/raddy
+
+# Copy manifests and source tree
+COPY Cargo.toml Cargo.lock README.md ./
+COPY crates ./crates
+COPY src ./src
+
+# Compile statically linked release binary and strip symbols
+RUN TARGET=$(cat /target.txt) && \
+    cargo build --release --bin raddy --target "$TARGET" && \
+    cp "/usr/src/raddy/target/$TARGET/release/raddy" /usr/local/bin/raddy && \
+    strip /usr/local/bin/raddy
+
+# Create application directories owned by nonroot (UID:GID 65532:65532)
+RUN mkdir -p /data /config /etc/caddy /srv /usr/share/caddy && \
+    chown -R 65532:65532 /data /config /etc/caddy /srv /usr/share/caddy
+
+# ==============================================================================
+# Stage 2: Minimal Distroless Static Non-Root Runtime
+# ==============================================================================
+# Based on Google Container Tools distroless static Debian 13 (Trixie).
+# Contains ZERO package managers, shells, or coreutils for minimal attack surface.
+FROM gcr.io/distroless/static-debian13:nonroot
+
+# Persistent storage paths
+ENV RADDY_DATA_DIR=/data \
+    XDG_DATA_HOME=/data \
+    XDG_CONFIG_HOME=/config
+
+# Copy pre-configured nonroot-owned directories
+COPY --from=builder --chown=65532:65532 /data /data
+COPY --from=builder --chown=65532:65532 /config /config
+COPY --from=builder --chown=65532:65532 /etc/caddy /etc/caddy
+COPY --from=builder --chown=65532:65532 /srv /srv
+COPY --from=builder --chown=65532:65532 /usr/share/caddy /usr/share/caddy
+
+# Copy statically linked binary
+COPY --from=builder --chown=65532:65532 /usr/local/bin/raddy /usr/local/bin/raddy
+
+# Default fallback configuration and welcome page
+COPY --chown=65532:65532 docker/Caddyfile /etc/caddy/Caddyfile
+COPY --chown=65532:65532 docker/index.html /usr/share/caddy/index.html
+
+# Expose HTTP, HTTPS (TCP & UDP for HTTP/3), and Admin API ports
+EXPOSE 80 443 443/udp 2019
+
+# Persistent data volumes for TLS certificates and configs
+VOLUME ["/data", "/config"]
+
+# Run strictly as unprivileged nonroot user (UID 65532)
+USER nonroot:nonroot
+
+WORKDIR /srv
+
+STOPSIGNAL SIGINT
+
+ENTRYPOINT ["/usr/local/bin/raddy"]
+CMD ["run", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"]

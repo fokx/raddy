@@ -170,11 +170,19 @@ cargo build --release
 
 ### Docker & Container Deployment
 
-Pre-built multi-architecture container images (`linux/amd64`, `linux/arm64`) are published to **GitHub Container Registry (GHCR)**:
+Pre-built multi-architecture container images (`linux/amd64`, `linux/arm64`) are published to **GitHub Container Registry (GHCR)** in two variants:
+
+| Image Tag | Base Image | User | Best For |
+|---|---|---|---|
+| `ghcr.io/fokx/raddy:latest` | `debian:bookworm-slim` | `root` | General production, debugging (contains `curl`, `ca-certificates`) |
+| `ghcr.io/fokx/raddy:nonroot` | `gcr.io/distroless/static-debian13:nonroot` | `nonroot` (65532) | Maximum security & hardened environments (zero shells, zero package managers, pure static musl binary) |
 
 ```bash
-# Pull the latest image
+# Pull standard image
 docker pull ghcr.io/fokx/raddy:latest
+
+# Or pull hardened distroless nonroot image
+docker pull ghcr.io/fokx/raddy:nonroot
 ```
 
 #### Quick Start with Docker
@@ -184,6 +192,8 @@ Run an instant container serving on HTTP (`:80`) and HTTPS (`:443` with native Q
 ```bash
 docker run -d \
   --name raddy \
+  --init \
+  --stop-signal SIGINT \
   -p 80:80 \
   -p 443:443 \
   -p 443:443/udp \
@@ -191,6 +201,24 @@ docker run -d \
   -v raddy_data:/data \
   -v raddy_config:/config \
   ghcr.io/fokx/raddy:latest
+```
+
+##### Running the Hardened `:nonroot` Image
+When using `ghcr.io/fokx/raddy:nonroot`, the process runs as unprivileged user `nonroot` (UID 65532). To allow binding to privileged ports `80` and `443`, pass `--cap-add=NET_BIND_SERVICE`:
+
+```bash
+docker run -d \
+  --name raddy \
+  --init \
+  --stop-signal SIGINT \
+  --cap-add=NET_BIND_SERVICE \
+  -p 80:80 \
+  -p 443:443 \
+  -p 443:443/udp \
+  -v $(pwd)/Caddyfile:/etc/caddy/Caddyfile:ro \
+  -v raddy_data:/data \
+  -v raddy_config:/config \
+  ghcr.io/fokx/raddy:nonroot
 ```
 
 > [!IMPORTANT]
