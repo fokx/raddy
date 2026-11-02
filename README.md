@@ -193,7 +193,6 @@ Run an instant container serving on HTTP (`:80`) and HTTPS (`:443` with native Q
 docker run -d \
   --name raddy \
   --init \
-  --stop-signal SIGINT \
   -p 80:80 \
   -p 443:443 \
   -p 443:443/udp \
@@ -204,37 +203,51 @@ docker run -d \
 ```
 
 ##### Running the Hardened `:nonroot` Image
-When using `ghcr.io/fokx/raddy:nonroot`, the process runs as unprivileged user `nonroot` (UID 65532). To allow binding to privileged ports `80` and `443`, pass `--cap-add=NET_BIND_SERVICE`:
+The `ghcr.io/fokx/raddy:nonroot` image runs strictly as unprivileged user `nonroot` (UID 65532). It listens on unprivileged ports **`8080` (HTTP)** and **`8443` (HTTPS)**, requiring zero elevated Linux capabilities (`CAP_NET_BIND_SERVICE`) or host sysctl tweaks.
+
+Map the host ports `80` and `443` to container ports `8080` and `8443`:
 
 ```bash
 docker run -d \
   --name raddy \
   --init \
-  --stop-signal SIGINT \
-  --cap-add=NET_BIND_SERVICE \
-  -p 80:80 \
-  -p 443:443 \
-  -p 443:443/udp \
-  -v $(pwd)/Caddyfile:/etc/caddy/Caddyfile:ro \
+  -p 80:8080 \
+  -p 443:8443 \
+  -p 443:8443/udp \
+  -v $(pwd)/Caddyfile.nonroot:/etc/caddy/Caddyfile:ro \
   -v raddy_data:/data \
   -v raddy_config:/config \
   ghcr.io/fokx/raddy:nonroot
 ```
 
-> [!IMPORTANT]
-> Always mount a persistent volume to `/data` (`-v raddy_data:/data`). Raddy stores obtained ACME / Let's Encrypt certificates, private keys, and OCSP staples in `/data`. Persisting this volume prevents re-issuance and Let's Encrypt rate limits across container updates.
-
 #### Docker Compose
 
-Use the included [`docker-compose.yml`](docker-compose.yml) to launch Raddy with persistent storage and network isolation:
+Two ready-to-run compose stacks are provided:
 
-```bash
-# Start Raddy in the background
-docker compose up -d
+1. **Standard Image** ([`docker-compose.yml`](docker-compose.yml)):
+   ```bash
+   docker compose up -d
+   ```
 
-# View live streaming logs
-docker compose logs -f raddy
-```
+2. **Hardened Non-Root Distroless Image** ([`docker-compose-nonroot.yml`](docker-compose-nonroot.yml)):
+   ```bash
+   docker compose -f docker-compose-nonroot.yml up -d
+   ```
+
+> [!TIP]
+> **Non-Root Custom Ports in Caddyfile:**
+> When using the `:nonroot` image with [`Caddyfile.nonroot`](Caddyfile.nonroot), declare `http_port` and `https_port` in global options:
+> ```caddyfile
+> {
+>     http_port 8080
+>     https_port 8443
+> }
+>
+> localhost {
+>     respond "Hello from non-root Raddy!" 200
+> }
+> ```
+> Any site blocks defined without an explicit port (like `localhost` or `example.com`) will automatically use `8443` for HTTPS and `8080` for HTTP redirects without requiring root permissions.
 
 #### Configuring via Environment Variables
 

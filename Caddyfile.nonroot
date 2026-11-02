@@ -1,0 +1,14 @@
+# Sample Caddyfile for Raddy non-root container
+# Configures unprivileged ports 8080 (HTTP) and 8443 (HTTPS)
+{
+    http_port 8080
+    https_port 8443
+}
+
+localhost {
+    # Default response for testing
+    respond "Hello from Raddy non-root container!" 200
+
+    # Or reverse proxy to your backend:
+    # reverse_proxy {env.UPSTREAM_HOST}
+}

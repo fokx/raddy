@@ -1,0 +1,17 @@
+# Default Raddy non-root container Caddyfile
+# Configured for unprivileged ports (>= 1024) to run in restricted environments without root or CAP_NET_BIND_SERVICE
+{
+    http_port 8080
+    https_port 8443
+}
+
+:8080 {
+    # Default welcome page directory
+    root * /usr/share/caddy
+
+    # Serve static assets
+    file_server
+
+    # Log requests
+    log
+}

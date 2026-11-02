@@ -1,0 +1,47 @@
+services:
+  raddy:
+    # Hardened unprivileged distroless image (UID 65532, zero shells/package managers)
+    image: ghcr.io/fokx/raddy:nonroot
+    # build:
+    #   context: .
+    #   dockerfile: Dockerfile.nonroot
+    container_name: raddy-nonroot
+    restart: unless-stopped
+    init: true
+    ports:
+      # HTTP (external 80 mapped to unprivileged container port 8080)
+      - "80:8080"
+      # HTTPS (TCP) (external 443 mapped to unprivileged container port 8443)
+      - "443:8443"
+      # HTTP/3 QUIC (UDP) - required for native HTTP/3
+      - "443:8443/udp"
+      # Admin API (bound strictly to 127.0.0.1 for security)
+      - "127.0.0.1:2019:2019"
+    environment:
+      # Log filter level (e.g. info, debug, trace)
+      - RUST_LOG=info
+      # ACME contact email for automatic SSL/TLS certificates
+      - RADDY_ACME_EMAIL=admin@example.com
+      # Dynamic environment variables accessible in Caddyfile via {env.UPSTREAM_HOST}
+      # - UPSTREAM_HOST=upstream_app:80
+    volumes:
+      # Mount custom non-root Caddyfile
+      - ./Caddyfile.nonroot:/etc/caddy/Caddyfile:ro
+      # Mount static site files (accessible at /srv inside container)
+      - ./site:/srv:ro
+      # Persistent volume for Let's Encrypt certificates and keys (owned by UID 65532)
+      - raddy_data:/data
+      # Persistent volume for runtime configurations
+      - raddy_config:/config
+    networks:
+      - raddy_net
+
+volumes:
+  raddy_data:
+    name: raddy_data
+  raddy_config:
+    name: raddy_config
+
+networks:
+  raddy_net:
+    driver: bridge

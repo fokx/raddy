@@ -697,6 +697,25 @@ fn test_caddyfile_reverse_proxy_env_interpolation() {
     assert_eq!(dial, "upstream_app:80");
 }
 
+#[test]
+fn test_caddyfile_nonroot_custom_ports() {
+    let input = r#"
+{
+    http_port 8080
+    https_port 8443
+}
+
+localhost {
+    respond "Hello from non-root!" 200
+}
+"#;
+    let config = adapt_caddyfile(input, ".").expect("Failed to adapt nonroot caddyfile");
+    let http = config.http_app().expect("Missing http app");
+    assert!(http.servers.contains_key("srv_:8443"), "Missing :8443 server: {:?}", http.servers.keys());
+    assert!(http.servers.contains_key("srv_:8080"), "Missing :8080 server: {:?}", http.servers.keys());
+}
+
+
 
 
 

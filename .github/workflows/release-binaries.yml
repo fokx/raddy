@@ -10,7 +10,25 @@ permissions:
   contents: write # Needed to create GitHub Releases and upload assets
 
 jobs:
+  create-release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: Release ${{ github.ref_name }}
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+
   release-binaries:
+    needs: [create-release]
     name: Build & Upload (${{ matrix.target }})
     runs-on: ${{ matrix.os }}
     strategy:
@@ -41,6 +59,12 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
+
+      - name: Setup cross toolchain for aarch64 Linux
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        uses: taiki-e/setup-cross-toolchain-action@v1
+        with:
+          target: ${{ matrix.target }}
 
       - name: Install Linux build dependencies
         if: startsWith(matrix.os, 'ubuntu')

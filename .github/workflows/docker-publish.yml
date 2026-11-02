@@ -71,6 +71,7 @@ jobs:
           file: Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
+          provenance: false
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha,scope=standard
@@ -82,11 +83,9 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ghcr.io/${{ github.repository }}
-          flavor: |
-            suffix=-nonroot,onlatest=true
           tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{version}}-nonroot
+            type=semver,pattern={{major}}.{{minor}}-nonroot
             type=raw,value=nonroot
 
       - name: Build and push Distroless nonroot image to GHCR
@@ -96,6 +95,7 @@ jobs:
           file: Dockerfile.nonroot
           platforms: linux/amd64,linux/arm64
           push: true
+          provenance: false
           tags: ${{ steps.meta-nonroot.outputs.tags }}
           labels: ${{ steps.meta-nonroot.outputs.labels }}
           cache-from: type=gha,scope=nonroot

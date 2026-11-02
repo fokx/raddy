@@ -65,11 +65,11 @@ COPY --from=builder --chown=65532:65532 /usr/share/caddy /usr/share/caddy
 COPY --from=builder --chown=65532:65532 /usr/local/bin/raddy /usr/local/bin/raddy
 
 # Default fallback configuration and welcome page
-COPY --chown=65532:65532 docker/Caddyfile /etc/caddy/Caddyfile
+COPY --chown=65532:65532 docker/Caddyfile.nonroot /etc/caddy/Caddyfile
 COPY --chown=65532:65532 docker/index.html /usr/share/caddy/index.html
 
-# Expose HTTP, HTTPS (TCP & UDP for HTTP/3), and Admin API ports
-EXPOSE 80 443 443/udp 2019
+# Expose unprivileged HTTP, HTTPS (TCP & UDP for HTTP/3), and Admin API ports
+EXPOSE 8080 8443 8443/udp 2019
 
 # Persistent data volumes for TLS certificates and configs
 VOLUME ["/data", "/config"]
