@@ -114,3 +114,68 @@ async fn test_live_https_server_with_tls_handshake() {
     shutdown_tx.send(true).unwrap();
     server_task.await.unwrap().unwrap();
 }
+
+#[tokio::test]
+async fn test_custom_https_port_and_dual_stack_quic() {
+    let raw_caddyfile = r#"
+{
+    http_port 28080
+    https_port 28443
+}
+
+localhost {
+    respond "Hello from custom port non-root!" 200
+}
+"#;
+    let config = raddy_caddyfile::adapt_caddyfile(raw_caddyfile, ".").expect("Failed to adapt");
+    let registry = ModuleRegistry::new();
+    let tls_manager = Arc::new(
+        raddy_tls::TlsManager::new_with_ca(
+            None,
+            "https://acme-staging-v02.api.letsencrypt.org/directory",
+        )
+        .expect("Failed to create TlsManager"),
+    );
+
+    let mut server_manager =
+        raddy_http::server::ServerManager::from_config(&config, &registry, Some(tls_manager))
+            .await
+            .expect("Failed to create ServerManager");
+
+    for server in server_manager.servers_mut() {
+        server.bind().await.expect("Failed to bind server instance");
+    }
+
+    let servers = server_manager.servers();
+    assert_eq!(servers.len(), 2);
+
+    let https_server = servers
+        .iter()
+        .find(|s| s.name() == "srv_:28443")
+        .expect("Missing :28443 server");
+    assert!(
+        https_server.is_tls(),
+        "srv_:28443 must be configured for TLS/HTTPS"
+    );
+    assert!(
+        https_server.has_quic(),
+        "srv_:28443 must have QUIC/HTTP3 config ready"
+    );
+    assert!(
+        !https_server.local_addrs().is_empty(),
+        "srv_:28443 must have bound TCP listeners"
+    );
+
+    let http_server = servers
+        .iter()
+        .find(|s| s.name() == "srv_:28080")
+        .expect("Missing :28080 server");
+    assert!(
+        !http_server.is_tls(),
+        "srv_:28080 must be cleartext HTTP redirect server"
+    );
+    assert!(
+        !http_server.local_addrs().is_empty(),
+        "srv_:28080 must have bound TCP listeners"
+    );
+}

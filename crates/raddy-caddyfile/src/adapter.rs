@@ -175,7 +175,19 @@ impl Adapter {
         if !servers.is_empty()
             || (self.layer4_global_options.is_empty() && self.layer4_site_blocks.is_empty())
         {
-            let http_app = HttpApp { servers };
+            let http_app = HttpApp {
+                http_port: if self.http_port != DEFAULT_HTTP_PORT {
+                    Some(self.http_port)
+                } else {
+                    None
+                },
+                https_port: if self.https_port != DEFAULT_HTTPS_PORT {
+                    Some(self.https_port)
+                } else {
+                    None
+                },
+                servers,
+            };
             config
                 .set_http_app(http_app)
                 .map_err(|e| ParseError::Adaptation {
@@ -601,6 +613,12 @@ impl Adapter {
                 }
             }
 
+            let auto_https_disabled = self
+                .auto_https
+                .as_ref()
+                .and_then(|a| a.disabled)
+                .unwrap_or(false);
+
             if let Some(ref tls_pol) = site_tls_policy {
                 let mut pol_clone = tls_pol.clone();
                 if pol_clone.r#match.is_none() && parsed_addr.host != "*" {
@@ -610,6 +628,15 @@ impl Adapter {
                 }
                 let policies = server.tls_connection_policies.get_or_insert_with(Vec::new);
                 policies.push(pol_clone);
+            } else if parsed_addr.scheme.as_deref() == Some("https")
+                || (!auto_https_disabled
+                    && parsed_addr.scheme.as_deref() != Some("http")
+                    && parsed_addr.port == self.https_port)
+            {
+                let policies = server.tls_connection_policies.get_or_insert_with(Vec::new);
+                if policies.is_empty() {
+                    policies.push(TlsConnectionPolicy::default());
+                }
             }
 
             // Build route matchers for host and path prefix
@@ -1936,10 +1963,13 @@ impl Adapter {
 
         // Find hosts served on HTTPS
         let mut https_hosts = Vec::new();
-        for srv in servers.values() {
+        for srv in servers.values_mut() {
             let is_https = srv.listen.iter().any(|l| l.ends_with(&https_port_str))
                 || srv.tls_connection_policies.is_some();
             if is_https {
+                if srv.tls_connection_policies.is_none() {
+                    srv.tls_connection_policies = Some(vec![TlsConnectionPolicy::default()]);
+                }
                 for route in &srv.routes {
                     if let Some(ref matchers) = route.r#match {
                         for m in matchers {
@@ -2003,9 +2033,14 @@ impl Adapter {
                     host: Some(vec![host.clone()]),
                     ..Default::default()
                 }]);
+                let redir_loc = if self.https_port == 443 {
+                    "https://{host}{uri}".to_string()
+                } else {
+                    format!("https://{{host}}:{}{{uri}}", self.https_port)
+                };
                 let redir_cfg = HandlerConfig::new("static_response")
                     .with_field("status_code", 308)
-                    .with_field("location", "https://{host}{uri}");
+                    .with_field("location", redir_loc);
                 redir_route.handle = vec![redir_cfg];
                 http_server.routes.push(redir_route);
             }
@@ -2722,6 +2757,7 @@ fn read_file_lines(path: &str) -> std::io::Result<Vec<String>> {
 
 #[derive(Debug, Clone)]
 struct ParsedAddress {
+    scheme: Option<String>,
     host: String,
     #[allow(dead_code)]
     port: u16,
@@ -2805,6 +2841,7 @@ fn parse_site_address(
 
     let listen = format!(":{}", port);
     Ok(ParsedAddress {
+        scheme: scheme.map(|s| s.to_string()),
         host,
         port,
         listen,

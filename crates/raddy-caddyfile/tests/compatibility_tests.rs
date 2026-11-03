@@ -711,8 +711,19 @@ localhost {
 "#;
     let config = adapt_caddyfile(input, ".").expect("Failed to adapt nonroot caddyfile");
     let http = config.http_app().expect("Missing http app");
+    assert_eq!(http.http_port, Some(8080));
+    assert_eq!(http.https_port, Some(8443));
     assert!(http.servers.contains_key("srv_:8443"), "Missing :8443 server: {:?}", http.servers.keys());
     assert!(http.servers.contains_key("srv_:8080"), "Missing :8080 server: {:?}", http.servers.keys());
+
+    let srv_https = http.servers.get("srv_:8443").unwrap();
+    assert!(srv_https.tls_connection_policies.is_some(), "srv_:8443 must have TLS connection policies");
+
+    let srv_http = http.servers.get("srv_:8080").unwrap();
+    assert_eq!(
+        srv_http.routes[0].handle[0].details.get("location"),
+        Some(&serde_json::json!("https://{host}:8443{uri}"))
+    );
 }
 
 

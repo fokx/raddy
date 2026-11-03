@@ -115,6 +115,12 @@ pub struct LogSamplingConfig {
 /// HTTP App configuration containing servers.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 pub struct HttpApp {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub http_port: Option<u16>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub https_port: Option<u16>,
+
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub servers: HashMap<String, HttpServer>,
 }

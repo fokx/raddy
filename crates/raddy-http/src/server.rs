@@ -227,24 +227,43 @@ impl HttpServerInstance {
         if self.tls_acceptor.is_some() && self.protocols.iter().any(|p| p == "h3") {
             if let Some(quic_cfg) = self.quic_server_config.take() {
                 for &bound_addr in &self.local_addrs {
-                    match quinn::Endpoint::server(quic_cfg.clone(), bound_addr) {
-                        Ok(ep) => {
-                            tracing::info!(
-                                "Server '{}' [HTTP/3 QUIC] successfully bound to UDP {}",
-                                self.name,
-                                bound_addr
-                            );
-                            if self.quic_endpoint.is_none() {
-                                self.quic_endpoint = Some(ep.clone());
-                            }
-                            self.quic_endpoints.push(ep);
-                            if self.alt_svc_port.is_none() {
-                                self.alt_svc_port = Some(bound_addr.port());
+                    match bind_udp_socket(bound_addr) {
+                        Ok(std_socket) => {
+                            let runtime = quinn::default_runtime().unwrap_or_else(|| {
+                                Arc::new(quinn::TokioRuntime)
+                            });
+                            match quinn::Endpoint::new(
+                                quinn::EndpointConfig::default(),
+                                Some(quic_cfg.clone()),
+                                std_socket,
+                                runtime,
+                            ) {
+                                Ok(ep) => {
+                                    tracing::info!(
+                                        "Server '{}' [HTTP/3 QUIC] successfully bound to UDP {}",
+                                        self.name,
+                                        bound_addr
+                                    );
+                                    if self.quic_endpoint.is_none() {
+                                        self.quic_endpoint = Some(ep.clone());
+                                    }
+                                    self.quic_endpoints.push(ep);
+                                    if self.alt_svc_port.is_none() {
+                                        self.alt_svc_port = Some(bound_addr.port());
+                                    }
+                                }
+                                Err(e) => {
+                                    tracing::warn!(
+                                        "Failed to bind QUIC endpoint on UDP {}: {}",
+                                        bound_addr,
+                                        e
+                                    );
+                                }
                             }
                         }
                         Err(e) => {
                             tracing::warn!(
-                                "Failed to bind QUIC endpoint on UDP {}: {}",
+                                "Failed to bind UDP socket on {}: {}",
                                 bound_addr,
                                 e
                             );
@@ -276,6 +295,18 @@ impl HttpServerInstance {
             addrs_str
         );
         Ok(())
+    }
+
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub fn is_tls(&self) -> bool {
+        self.tls_acceptor.is_some()
+    }
+
+    pub fn has_quic(&self) -> bool {
+        self.quic_server_config.is_some() || !self.quic_endpoints.is_empty() || self.quic_endpoint.is_some()
     }
 
     pub fn local_addr(&self) -> Option<SocketAddr> {
@@ -532,6 +563,25 @@ fn bind_tcp_listener(addr: SocketAddr, v6_only: bool) -> Result<TcpListener> {
     Ok(listener)
 }
 
+fn bind_udp_socket(addr: SocketAddr) -> Result<std::net::UdpSocket> {
+    let domain = if addr.is_ipv6() {
+        socket2::Domain::IPV6
+    } else {
+        socket2::Domain::IPV4
+    };
+    let socket = socket2::Socket::new(domain, socket2::Type::DGRAM, Some(socket2::Protocol::UDP))?;
+    if addr.is_ipv6() {
+        let _ = socket.set_only_v6(true);
+    }
+    socket.set_reuse_address(true)?;
+    #[cfg(all(unix, not(target_os = "solaris"), not(target_os = "illumos")))]
+    let _ = socket.set_reuse_port(true);
+    socket.set_nonblocking(true)?;
+    socket.bind(&addr.into())?;
+    let std_socket: std::net::UdpSocket = socket.into();
+    Ok(std_socket)
+}
+
 /// Manager responsible for instantiating and coordinating HTTP/HTTPS servers from configuration.
 pub struct ServerManager {
     servers: Vec<HttpServerInstance>,
@@ -552,6 +602,8 @@ impl ServerManager {
         let log_pipeline = Arc::new(crate::logging::LogPipeline::from_config(config));
 
         if let Some(http) = config.http_app() {
+            let configured_https_port = http.https_port.unwrap_or(443);
+            let https_port_suffix = format!(":{}", configured_https_port);
             for (name, srv_cfg) in &http.servers {
                 let vhost_router = compile_virtual_host_router(srv_cfg, registry)?;
                 let listen_addrs = srv_cfg.listen.clone();
@@ -559,7 +611,7 @@ impl ServerManager {
                     .first()
                     .cloned()
                     .unwrap_or_else(|| ":80".into());
-                let is_tls = listen_addrs.iter().any(|l| l.ends_with(":443"))
+                let is_tls = listen_addrs.iter().any(|l| l.ends_with(&https_port_suffix) || l.ends_with(":443"))
                     || srv_cfg.tls_connection_policies.is_some();
                 let protocols = srv_cfg
                     .protocols
