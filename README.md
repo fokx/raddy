@@ -172,10 +172,10 @@ cargo build --release
 
 Pre-built multi-architecture container images (`linux/amd64`, `linux/arm64`) are published to **GitHub Container Registry (GHCR)** in two variants:
 
-| Image Tag | Base Image | User | Best For |
-|---|---|---|---|
-| `ghcr.io/fokx/raddy:latest` | `debian:bookworm-slim` | `root` | General production, debugging (contains `curl`, `ca-certificates`) |
-| `ghcr.io/fokx/raddy:nonroot` | `gcr.io/distroless/static-debian13:nonroot` | `nonroot` (65532) | Maximum security & hardened environments (zero shells, zero package managers, pure static musl binary) |
+| Image Tag | Base Image | User | Best For | Ports |
+|---|---|---|---|---|
+| `ghcr.io/fokx/raddy:latest` | `gcr.io/distroless/static-debian13:nonroot` | `nonroot` (65532) | Standard production environments (Docker 20.10+ with port 80/443 mapping) | `80`, `443`, `2019` |
+| `ghcr.io/fokx/raddy:nonroot` | `gcr.io/distroless/static-debian13:nonroot` | `nonroot` (65532) | Hardened environments (Kubernetes, Podman, unprivileged rootless ports) | `8080`, `8443`, `2019` |
 
 ```bash
 # Pull standard image

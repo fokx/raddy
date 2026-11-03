@@ -53,7 +53,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # --- Standard Debian-based Image (:latest) ---
+      # --- Distroless Standard Image (:latest) ---
       - name: Extract Docker metadata (standard)
         id: meta
         uses: docker/metadata-action@v5
