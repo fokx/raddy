@@ -330,6 +330,18 @@ async fn test_full_tcp_server_end_to_end() {
     assert_eq!(resp.status(), StatusCode::OK);
     assert_eq!(
         resp.headers()
+            .get("server")
+            .and_then(|v| v.to_str().ok()),
+        Some("Caddy")
+    );
+    assert_eq!(
+        resp.headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok()),
+        Some("text/plain; charset=utf-8")
+    );
+    assert_eq!(
+        resp.headers()
             .get("X-Powered-By")
             .and_then(|v| v.to_str().ok()),
         Some("Raddy")

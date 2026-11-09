@@ -1251,4 +1251,138 @@ async fn test_handle_errors_with_file_server_preserves_error_status() {
     );
 }
 
+#[tokio::test]
+async fn test_respond_content_type_and_server_header() {
+    let caddyfile = r#"
+    http://localhost:8080 {
+        respond "Hello from Raddy!\n" 200
+    }
+    "#;
+
+    let config = adapt_caddyfile(caddyfile, Path::new(".")).unwrap();
+    let http = config.http_app().unwrap();
+    let server = http.servers.values().next().unwrap();
+    let registry = ModuleRegistry::new();
+    let router = compile_virtual_host_router(server, &registry).unwrap();
+
+    let mut headers = HeaderMap::new();
+    headers.insert(header::HOST, "localhost:8080".parse().unwrap());
+    let mut ctx = Context::new(Method::GET, "/".parse().unwrap(), headers, Bytes::new());
+
+    router.route_request(&mut ctx).await.unwrap();
+
+    assert_eq!(ctx.status, Some(StatusCode::OK));
+    assert_eq!(
+        ctx.response_headers.get(header::SERVER).unwrap(),
+        "Caddy"
+    );
+    assert_eq!(
+        ctx.response_headers.get(header::CONTENT_TYPE).unwrap(),
+        "text/plain; charset=utf-8"
+    );
+    assert_eq!(ctx.response_body, Some(Bytes::from("Hello from Raddy!\n")));
+}
+
+#[tokio::test]
+async fn test_respond_json_and_custom_content_types() {
+    let caddyfile = r#"
+    localhost:8080 {
+        @json path /api/data
+        respond @json "{\"status\": \"ok\", \"count\": 42}" 200
+
+        @html path /page
+        respond @html "<h1>HTML Response</h1>" 200 {
+            header Content-Type "text/html; charset=utf-8"
+        }
+
+        @empty path /empty
+        respond @empty 204
+    }
+    "#;
+
+    let config = adapt_caddyfile(caddyfile, Path::new(".")).unwrap();
+    let http = config.http_app().unwrap();
+    let server = http.servers.values().next().unwrap();
+    let registry = ModuleRegistry::new();
+    let router = compile_virtual_host_router(server, &registry).unwrap();
+
+    // 1. JSON response detection
+    let mut headers = HeaderMap::new();
+    headers.insert(header::HOST, "localhost".parse().unwrap());
+    let mut ctx = Context::new(Method::GET, "/api/data".parse().unwrap(), headers.clone(), Bytes::new());
+    router.route_request(&mut ctx).await.unwrap();
+    assert_eq!(ctx.status, Some(StatusCode::OK));
+    assert_eq!(
+        ctx.response_headers.get(header::CONTENT_TYPE).unwrap(),
+        "application/json"
+    );
+    assert_eq!(
+        ctx.response_headers.get(header::SERVER).unwrap(),
+        "Caddy"
+    );
+
+    // 2. Custom Content-Type preserved
+    let mut ctx_html = Context::new(Method::GET, "/page".parse().unwrap(), headers.clone(), Bytes::new());
+    router.route_request(&mut ctx_html).await.unwrap();
+    assert_eq!(ctx_html.status, Some(StatusCode::OK));
+    assert_eq!(
+        ctx_html.response_headers.get(header::CONTENT_TYPE).unwrap(),
+        "text/html; charset=utf-8"
+    );
+
+    // 3. 204 No Content has no Content-Type
+    let mut ctx_empty = Context::new(Method::GET, "/empty".parse().unwrap(), headers, Bytes::new());
+    router.route_request(&mut ctx_empty).await.unwrap();
+    assert_eq!(ctx_empty.status, Some(StatusCode::NO_CONTENT));
+    assert!(!ctx_empty.response_headers.contains_key(header::CONTENT_TYPE));
+}
+
+#[tokio::test]
+async fn test_server_header_removal_and_override() {
+    let caddyfile = r#"
+    localhost:8080 {
+        header -Server
+        respond "No Server Header" 200
+    }
+    "#;
+
+    let config = adapt_caddyfile(caddyfile, Path::new(".")).unwrap();
+    let http = config.http_app().unwrap();
+    let server = http.servers.values().next().unwrap();
+    let registry = ModuleRegistry::new();
+    let router = compile_virtual_host_router(server, &registry).unwrap();
+
+    let mut headers = HeaderMap::new();
+    headers.insert(header::HOST, "localhost".parse().unwrap());
+    let mut ctx = Context::new(Method::GET, "/".parse().unwrap(), headers, Bytes::new());
+    router.route_request(&mut ctx).await.unwrap();
+
+    assert_eq!(ctx.status, Some(StatusCode::OK));
+    assert!(!ctx.response_headers.contains_key(header::SERVER));
+
+    // Custom Server header override
+    let caddyfile2 = r#"
+    localhost:8080 {
+        header Server "MyCustomServer/1.0"
+        respond "Custom Server Header" 200
+    }
+    "#;
+    let config2 = adapt_caddyfile(caddyfile2, Path::new(".")).unwrap();
+    let http2 = config2.http_app().unwrap();
+    let server2 = http2.servers.values().next().unwrap();
+    let router2 = compile_virtual_host_router(server2, &registry).unwrap();
+
+    let mut headers2 = HeaderMap::new();
+    headers2.insert(header::HOST, "localhost".parse().unwrap());
+    let mut ctx2 = Context::new(Method::GET, "/".parse().unwrap(), headers2, Bytes::new());
+    router2.route_request(&mut ctx2).await.unwrap();
+
+    assert_eq!(ctx2.status, Some(StatusCode::OK));
+    assert_eq!(
+        ctx2.response_headers.get(header::SERVER).unwrap(),
+        "MyCustomServer/1.0"
+    );
+}
+
+
 

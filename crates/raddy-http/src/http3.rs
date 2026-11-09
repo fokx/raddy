@@ -1,5 +1,5 @@
 use bytes::{Buf, Bytes};
-use http::{Response, StatusCode};
+use http::{HeaderValue, Response, StatusCode};
 use quinn::crypto::rustls::QuicServerConfig;
 use quinn::{Connection, ServerConfig as QuinnServerConfig};
 use raddy_core::context::Context;
@@ -98,6 +98,12 @@ async fn handle_h3_stream(
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("500 Internal Server Error: {}\n", e),
         );
+        if !ctx.response_headers.contains_key(http::header::CONTENT_TYPE) {
+            ctx.response_headers.insert(
+                http::header::CONTENT_TYPE,
+                HeaderValue::from_static("text/plain; charset=utf-8"),
+            );
+        }
     }
 
     let status = ctx.status.unwrap_or(StatusCode::OK);

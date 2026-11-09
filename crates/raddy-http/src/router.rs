@@ -376,11 +376,26 @@ fn compile_handler(h_cfg: &HandlerConfig, registry: &ModuleRegistry) -> Result<A
                     .get("close")
                     .and_then(|v| v.as_bool())
                     .unwrap_or(false);
+                let mut headers = HashMap::new();
+                if let Some(obj) = h_cfg.details.get("headers").and_then(|v| v.as_object()) {
+                    for (k, val) in obj {
+                        if let Some(arr) = val.as_array() {
+                            let vals: Vec<String> = arr
+                                .iter()
+                                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                                .collect();
+                            headers.insert(k.clone(), vals);
+                        } else if let Some(s) = val.as_str() {
+                            headers.insert(k.clone(), vec![s.to_string()]);
+                        }
+                    }
+                }
 
                 Ok(Arc::new(StaticResponseHandler {
                     status_code,
                     body,
                     close,
+                    headers,
                 }))
             }
         }

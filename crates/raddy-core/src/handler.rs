@@ -19,18 +19,68 @@ pub trait Handler: Send + Sync {
 }
 
 /// Static response handler (for `respond`, `error`).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct StaticResponseHandler {
     pub status_code: StatusCode,
     pub body: String,
     pub close: bool,
+    pub headers: HashMap<String, Vec<String>>,
+}
+
+impl StaticResponseHandler {
+    pub fn new(status_code: StatusCode, body: impl Into<String>, close: bool) -> Self {
+        Self {
+            status_code,
+            body: body.into(),
+            close,
+            headers: HashMap::new(),
+        }
+    }
+
+    pub fn with_headers(mut self, headers: HashMap<String, Vec<String>>) -> Self {
+        self.headers = headers;
+        self
+    }
 }
 
 #[async_trait]
 impl Handler for StaticResponseHandler {
     async fn handle(&self, ctx: &mut Context) -> Result<()> {
         let evaluated_body = eval_placeholders(&self.body, ctx);
-        ctx.set_response(self.status_code, evaluated_body);
+        ctx.set_response(self.status_code, evaluated_body.clone());
+
+        for (k, vals) in &self.headers {
+            if let Ok(name) = http::HeaderName::try_from(k.as_str()) {
+                for v in vals {
+                    let evaluated_val = eval_placeholders(v, ctx);
+                    if let Ok(val) = http::HeaderValue::try_from(evaluated_val) {
+                        ctx.response_headers.insert(name.clone(), val);
+                    }
+                }
+            }
+        }
+
+        if !evaluated_body.is_empty()
+            && self.status_code != StatusCode::NO_CONTENT
+            && self.status_code != StatusCode::NOT_MODIFIED
+            && !ctx.response_headers.contains_key(http::header::CONTENT_TYPE)
+        {
+            let trimmed = evaluated_body.trim();
+            let is_json = (trimmed.starts_with('{') && trimmed.ends_with('}'))
+                || (trimmed.starts_with('[') && trimmed.ends_with(']'));
+            if is_json && serde_json::from_str::<serde_json::Value>(trimmed).is_ok() {
+                ctx.response_headers.insert(
+                    http::header::CONTENT_TYPE,
+                    http::HeaderValue::from_static("application/json"),
+                );
+            } else {
+                ctx.response_headers.insert(
+                    http::header::CONTENT_TYPE,
+                    http::HeaderValue::from_static("text/plain; charset=utf-8"),
+                );
+            }
+        }
+
         if self.close {
             ctx.response_headers.insert(
                 http::header::CONNECTION,

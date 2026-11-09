@@ -46,6 +46,7 @@ pub async fn handle_request(
                 tracing::info!("Responding to ACME HTTP-01 challenge for token '{}'", token);
                 let resp = Response::builder()
                     .status(StatusCode::OK)
+                    .header(http::header::SERVER, "Caddy")
                     .header(http::header::CONTENT_TYPE, "text/plain")
                     .body(full_box_body(Bytes::from(key_auth)))
                     .unwrap();
@@ -90,6 +91,12 @@ pub async fn handle_request(
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("500 Internal Server Error: {}\n", e),
         );
+        if !ctx.response_headers.contains_key(http::header::CONTENT_TYPE) {
+            ctx.response_headers.insert(
+                http::header::CONTENT_TYPE,
+                HeaderValue::from_static("text/plain; charset=utf-8"),
+            );
+        }
     }
 
     // Advertise HTTP/3 over QUIC via Alt-Svc if enabled

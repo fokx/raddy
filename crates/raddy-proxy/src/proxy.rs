@@ -177,6 +177,17 @@ impl Handler for ReverseProxyHandler {
                     self.mutator.apply_header_down(&mut resp_headers, ctx);
                     resp_headers.append(http::header::VIA, HeaderValue::from_static("1.1 Caddy"));
 
+                    let server_deleted = self
+                        .mutator
+                        .header_down_delete
+                        .iter()
+                        .any(|d| d.eq_ignore_ascii_case("server"));
+                    if !server_deleted && !resp_headers.contains_key(http::header::SERVER) {
+                        if let Some(srv) = ctx.response_headers.get(http::header::SERVER) {
+                            resp_headers.insert(http::header::SERVER, srv.clone());
+                        }
+                    }
+
                     // 7. Write final response to context
                     ctx.status = Some(status);
                     ctx.response_headers = resp_headers;

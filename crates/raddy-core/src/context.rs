@@ -57,6 +57,8 @@ impl Context {
         }
         let orig_method = method.clone();
         let orig_uri = uri.clone();
+        let mut response_headers = HeaderMap::new();
+        response_headers.insert(http::header::SERVER, HeaderValue::from_static("Caddy"));
         Self {
             method,
             orig_method,
@@ -69,7 +71,7 @@ impl Context {
             extensions: Arc::new(Mutex::new(http::Extensions::new())),
             vars: HashMap::new(),
             status: None,
-            response_headers: HeaderMap::new(),
+            response_headers,
             response_body: None,
             response_stream: None,
             response_written: false,
@@ -147,6 +149,12 @@ impl Context {
         } else {
             format!("{}\n", err_msg)
         };
+        if !self.response_headers.contains_key(http::header::CONTENT_TYPE) {
+            self.response_headers.insert(
+                http::header::CONTENT_TYPE,
+                HeaderValue::from_static("text/plain; charset=utf-8"),
+            );
+        }
         self.response_body = Some(Bytes::from(body_str));
         self.response_stream = None;
         self.response_written = true;

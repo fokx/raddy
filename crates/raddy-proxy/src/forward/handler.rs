@@ -564,6 +564,9 @@ impl Handler for ForwardProxyHandler {
         let mut resp_headers = resp_parts.headers;
         remove_hop_by_hop(&mut resp_headers);
         resp_headers.remove(http::header::SERVER);
+        if let Some(srv) = ctx.response_headers.get(http::header::SERVER) {
+            resp_headers.insert(http::header::SERVER, srv.clone());
+        }
 
         if !self.hide_via {
             resp_headers.insert("via", HeaderValue::from_static("1.1 caddy"));
