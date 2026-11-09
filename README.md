@@ -158,7 +158,7 @@ Extract the archive and move `raddy` to your system `PATH` (e.g. `/usr/local/bin
 
 ```bash
 # Clone the repository
-git clone https://github.com/your-org/raddy.git
+git clone https://github.com/fokx/raddy.git
 cd raddy
 
 # Build release binary
@@ -515,19 +515,53 @@ Raddy exposes a RESTful Admin API (default: `http://127.0.0.1:2019`) for dynamic
 | `GET` | `/config/` | Retrieve the active running JSON configuration |
 | `POST` | `/stop` | Gracefully shut down the server and active listeners |
 
+### Unix Domain Socket & Permission Hardening
+
+When listening on a local TCP socket (`127.0.0.1:2019`), any unprivileged local process can access the Admin API to inspect or alter configuration, initiate reloads, or terminate the server.
+
+You can switch the Admin API to a permissioned Unix domain socket to restrict access exclusively to authorized users or groups:
+
+```caddyfile
+{
+    # Listen on a Unix socket with optional octal file permissions (|0660 or |0600)
+    admin unix//run/raddy/raddy-admin.sock|0660
+}
+
+localhost:8080 {
+    respond "Hello from hardened Raddy!" 200
+}
+```
+
+Or using block syntax:
+
+```caddyfile
+{
+    admin {
+        listen unix//run/raddy/raddy-admin.sock|0660
+    }
+}
+```
+
 ### Admin API Usage Examples
 
 ```bash
-# Query the active configuration
+# Query the active configuration (TCP)
 curl http://127.0.0.1:2019/config/
 
-# Dynamically reload configuration
-curl -X POST http://127.0.0.1:2019/load \
-     -H "Content-Type: text/caddyfile" \
-     --data-binary @Caddyfile
+# Query the active configuration (Unix socket)
+curl --unix-socket /run/raddy/raddy-admin.sock http://localhost/config/
 
-# Gracefully stop the server
-curl -X POST http://127.0.0.1:2019/stop
+# Dynamically reload configuration
+curl -X POST --unix-socket /run/raddy/raddy-admin.sock \
+     -H "Content-Type: text/caddyfile" \
+     --data-binary @Caddyfile \
+     http://localhost/load
+
+# Gracefully stop the server via CLI using the Unix socket
+raddy stop --address unix//run/raddy/raddy-admin.sock
+
+# Or reload via CLI (auto-detects socket from Caddyfile when -a is omitted)
+raddy reload --config Caddyfile
 ```
 
 ---

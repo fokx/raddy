@@ -25,6 +25,13 @@ Raddy exposes a RESTful Admin API (default: `http://127.0.0.1:2019`) for dynamic
 
 - **Host Header Validation**: Strictly enforces that incoming Admin API requests target authorized hostnames (`localhost`, `127.0.0.1`, `[::1]`).
 - **RFC 3986 Origin Validation**: Validates the `Origin` header on mutating requests (`POST`, `PUT`, `DELETE`) to prevent Cross-Site Request Forgery (CSRF) and DNS rebinding attacks.
+- **Unix Domain Socket Isolation & File Permissions**: In shared, multi-tenant, or security-sensitive environments, listening on a local TCP socket (`127.0.0.1:2019`) exposes the Admin API to any process running on the host machine. Raddy supports binding the Admin API to a Unix domain socket with custom octal permission masks:
+  ```caddyfile
+  {
+      admin unix//run/raddy/raddy-admin.sock|0660
+  }
+  ```
+  Raddy automatically creates necessary parent directories, cleanly unlinks stale socket files from prior ungraceful terminations, applies the requested `chmod` mask (e.g. `0660` or `0600`), and automatically removes the socket file when gracefully shutting down.
 
 ---
 

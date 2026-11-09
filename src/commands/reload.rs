@@ -30,28 +30,42 @@ pub async fn reload_command(
         (json_str, "application/json")
     };
 
-    let client = reqwest::Client::new();
-    let url = format!("{}/load", address.trim_end_matches('/'));
-    tracing::info!("Sending reload request to {}...", url);
+    let target_addr = if address == "http://127.0.0.1:2019" || address == "127.0.0.1:2019" {
+        if let Ok(cfg) = crate::commands::config_ops::load_or_adapt(config, adapter) {
+            cfg.admin
+                .and_then(|a| a.listen)
+                .unwrap_or_else(|| address.to_string())
+        } else {
+            address.to_string()
+        }
+    } else {
+        address.to_string()
+    };
 
-    let mut req = client
-        .post(&url)
-        .header("content-type", content_type);
+    let client = raddy_admin::AdminClient::new(&target_addr);
+    tracing::info!("Sending reload request to {}...", target_addr);
+
+    let mut req_builder = http::Request::builder()
+        .method(http::Method::POST)
+        .uri("/load")
+        .header(http::header::CONTENT_TYPE, content_type);
     if _force {
-        req = req.header("cache-control", "must-revalidate");
+        req_builder = req_builder.header("cache-control", "must-revalidate");
     }
 
-    let resp = req
-        .body(content)
-        .send()
-        .await
-        .with_context(|| format!("Failed to connect to Raddy Admin API at '{}'", url))?;
+    let req = req_builder
+        .body(bytes::Bytes::from(content))
+        .context("Failed to construct reload HTTP request")?;
 
-    if resp.status().is_success() {
+    let resp = client
+        .send(req)
+        .await
+        .with_context(|| format!("Failed to connect to Raddy Admin API at '{}'", target_addr))?;
+
+    if resp.is_success() {
         println!("Successfully reloaded configuration via Admin API.");
         Ok(())
     } else {
-        let err = resp.text().await.unwrap_or_default();
-        bail!("Failed to reload configuration: {}", err);
+        bail!("Failed to reload configuration: {}", resp.text());
     }
 }

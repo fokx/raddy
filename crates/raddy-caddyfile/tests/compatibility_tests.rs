@@ -724,9 +724,51 @@ localhost {
         srv_http.routes[0].handle[0].details.get("location"),
         Some(&serde_json::json!("https://{host}:8443{uri}"))
     );
+}#[test]
+fn test_caddyfile_admin_unix_socket_adaptation() {
+    let input = r#"
+    {
+        admin unix//run/raddy/raddy-admin.sock
+    }
+
+    :8080 {
+        respond "OK" 200
+    }
+    "#;
+    let config = adapt_caddyfile(input, ".").expect("Failed to adapt admin unix socket caddyfile");
+    let admin = config.admin.expect("admin config should be present");
+    assert_eq!(admin.listen.as_deref(), Some("unix//run/raddy/raddy-admin.sock"));
+
+    // With permissions mode
+    let input_with_mode = r#"
+    {
+        admin unix//run/raddy/raddy-admin.sock|0660
+    }
+
+    :8080 {
+        respond "OK" 200
+    }
+    "#;
+    let config_mode = adapt_caddyfile(input_with_mode, ".").expect("Failed to adapt admin unix socket with mode");
+    let admin_mode = config_mode.admin.expect("admin config should be present");
+    assert_eq!(admin_mode.listen.as_deref(), Some("unix//run/raddy/raddy-admin.sock|0660"));
+
+    // Block syntax
+    let input_block = r#"
+    {
+        admin {
+            listen unix//run/raddy/raddy-admin.sock
+            enforce_origin
+        }
+    }
+
+    :8080 {
+        respond "OK" 200
+    }
+    "#;
+    let config_block = adapt_caddyfile(input_block, ".").expect("Failed to adapt admin block syntax");
+    let admin_block = config_block.admin.expect("admin config should be present");
+    assert_eq!(admin_block.listen.as_deref(), Some("unix//run/raddy/raddy-admin.sock"));
+    assert_eq!(admin_block.enforce_origin, Some(true));
 }
-
-
-
-
 

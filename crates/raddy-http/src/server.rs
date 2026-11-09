@@ -226,6 +226,7 @@ impl HttpServerInstance {
         // Bind QUIC UDP endpoints for all bound addresses if TLS and h3 are enabled
         if self.tls_acceptor.is_some() && self.protocols.iter().any(|p| p == "h3") {
             if let Some(quic_cfg) = self.quic_server_config.take() {
+                let mut quic_bound_addrs = Vec::new();
                 for &bound_addr in &self.local_addrs {
                     match bind_udp_socket(bound_addr) {
                         Ok(std_socket) => {
@@ -239,11 +240,7 @@ impl HttpServerInstance {
                                 runtime,
                             ) {
                                 Ok(ep) => {
-                                    tracing::info!(
-                                        "Server '{}' [HTTP/3 QUIC] successfully bound to UDP {}",
-                                        self.name,
-                                        bound_addr
-                                    );
+                                    quic_bound_addrs.push(bound_addr);
                                     if self.quic_endpoint.is_none() {
                                         self.quic_endpoint = Some(ep.clone());
                                     }
@@ -269,6 +266,18 @@ impl HttpServerInstance {
                             );
                         }
                     }
+                }
+                if !quic_bound_addrs.is_empty() {
+                    let quic_addrs_str = quic_bound_addrs
+                        .iter()
+                        .map(|a| a.to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    tracing::info!(
+                        "Server '{}' [HTTP/3 QUIC] successfully bound to UDP {}",
+                        self.name,
+                        quic_addrs_str
+                    );
                 }
             }
         }

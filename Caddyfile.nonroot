@@ -7,7 +7,7 @@
 
 localhost {
     # Default response for testing
-    respond "Hello from Raddy non-root container!" 200
+    respond "Hello from Raddy non-root container!\n" 200
 
     # Or reverse proxy to your backend:
     # reverse_proxy {env.UPSTREAM_HOST}

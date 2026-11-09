@@ -275,6 +275,25 @@ impl Adapter {
                             admin.listen = Some(arg.clone());
                         }
                     }
+                    if let Some(sub_directives) = &opt.block {
+                        for sub in sub_directives {
+                            match sub.name.as_str() {
+                                "disabled" | "off" => admin.disabled = Some(true),
+                                "listen" => {
+                                    if let Some(arg) = sub.args.first() {
+                                        admin.listen = Some(arg.clone());
+                                    }
+                                }
+                                "enforce_origin" => admin.enforce_origin = Some(true),
+                                "origins" => {
+                                    let mut origins = admin.origins.unwrap_or_default();
+                                    origins.extend(sub.args.clone());
+                                    admin.origins = Some(origins);
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
                     self.admin = Some(admin);
                 }
                 "order" => {

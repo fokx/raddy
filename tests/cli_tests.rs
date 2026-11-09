@@ -212,11 +212,9 @@ async fn test_cli_run_reload_and_stop() {
     let mut ready = false;
     for _ in 0..40 {
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-        if let Ok(resp) = client.get(site_url).send().await {
-            if resp.status().is_success() {
-                ready = true;
-                break;
-            }
+        if client.get(site_url).send().await.map(|r| r.status().is_success()).unwrap_or(false) {
+            ready = true;
+            break;
         }
     }
     assert!(ready, "Server failed to start within 4s");
@@ -370,4 +368,118 @@ async fn test_cli_file_server() {
     let _ = child.wait();
 
     let _ = fs::remove_dir_all(&temp_root);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn test_cli_run_reload_and_stop_unix_socket() {
+    let temp_dir = std::env::temp_dir();
+    let sock_path = temp_dir.join(format!("raddy_cli_admin_{}.sock", std::process::id()));
+    let caddyfile_v1 = temp_dir.join(format!("test_run_unix_v1_{}.caddyfile", std::process::id()));
+    let caddyfile_v2 = temp_dir.join(format!("test_run_unix_v2_{}.caddyfile", std::process::id()));
+
+    let v1_content = format!(
+        r#"
+    {{
+        admin unix//{}|0660
+    }}
+    127.0.0.1:28218 {{
+        respond "Unix CLI Run V1" 200
+    }}
+    "#,
+        sock_path.display()
+    );
+
+    let v2_content = format!(
+        r#"
+    {{
+        admin unix//{}|0660
+    }}
+    127.0.0.1:28218 {{
+        respond "Unix CLI Run V2 (Reloaded)" 200
+    }}
+    "#,
+        sock_path.display()
+    );
+
+    fs::write(&caddyfile_v1, v1_content).unwrap();
+    fs::write(&caddyfile_v2, v2_content).unwrap();
+
+    // 1. Launch raddy run with Unix socket admin
+    let mut child = Command::new(env!("CARGO_BIN_EXE_raddy"))
+        .arg("run")
+        .arg("--config")
+        .arg(&caddyfile_v1)
+        .spawn()
+        .expect("Failed to spawn raddy run with unix socket admin");
+
+    let client = reqwest::Client::builder()
+        .pool_max_idle_per_host(0)
+        .build()
+        .unwrap();
+    let site_url = "http://127.0.0.1:28218";
+
+    // Wait for server to be responsive
+    let mut ready = false;
+    for _ in 0..40 {
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        if client.get(site_url).send().await.map(|r| r.status().is_success()).unwrap_or(false) {
+            ready = true;
+            break;
+        }
+    }
+    assert!(ready, "Server failed to respond within 4s");
+
+    // Verify socket file exists
+    assert!(sock_path.exists(), "Admin unix socket file must exist");
+
+    // 2. Query initial response
+    let resp_v1 = client.get(site_url).send().await.unwrap();
+    assert_eq!(resp_v1.text().await.unwrap(), "Unix CLI Run V1");
+
+    // 3. Reload configuration via CLI using unix socket address
+    let admin_arg = format!("unix//{}", sock_path.display());
+    let reload_output = raddy_bin()
+        .arg("reload")
+        .arg("--config")
+        .arg(&caddyfile_v2)
+        .arg("--address")
+        .arg(&admin_arg)
+        .output()
+        .expect("Failed to run raddy reload over unix socket");
+
+    assert!(
+        reload_output.status.success(),
+        "reload stdout: {}\nreload stderr: {}",
+        String::from_utf8_lossy(&reload_output.stdout),
+        String::from_utf8_lossy(&reload_output.stderr)
+    );
+
+    // 4. Query again: should receive V2
+    let resp_v2 = client.get(site_url).send().await.unwrap();
+    assert_eq!(resp_v2.text().await.unwrap(), "Unix CLI Run V2 (Reloaded)");
+
+    // 5. Stop server via CLI using unix socket address
+    let stop_output = raddy_bin()
+        .arg("stop")
+        .arg("--address")
+        .arg(&admin_arg)
+        .output()
+        .expect("Failed to run raddy stop over unix socket");
+
+    assert!(
+        stop_output.status.success(),
+        "stop stdout: {}\nstop stderr: {}",
+        String::from_utf8_lossy(&stop_output.stdout),
+        String::from_utf8_lossy(&stop_output.stderr)
+    );
+
+    // Child should exit gracefully
+    let status = child.wait().expect("Failed to wait on child process");
+    assert!(status.success());
+
+    // Clean up temporary caddyfiles
+    let _ = fs::remove_file(caddyfile_v1);
+    let _ = fs::remove_file(caddyfile_v2);
+    let _ = fs::remove_file(&sock_path);
 }

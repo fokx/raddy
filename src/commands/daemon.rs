@@ -43,15 +43,18 @@ pub async fn start_command(
     let pid = child.id();
 
     // Poll the Admin API to verify readiness
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_millis(500))
-        .build()?;
+    let admin_address = if let Ok(cfg) = crate::commands::config_ops::load_or_adapt(config, adapter) {
+        cfg.admin.and_then(|a| a.listen).unwrap_or_else(|| "127.0.0.1:2019".into())
+    } else {
+        "127.0.0.1:2019".into()
+    };
+    let client = raddy_admin::AdminClient::new(&admin_address);
     let mut ready = false;
 
     for _ in 0..40 {
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-        if let Ok(resp) = client.get("http://127.0.0.1:2019/").send().await {
-            if resp.status().is_success() {
+        if let Ok(resp) = client.get("/").await {
+            if resp.is_success() {
                 ready = true;
                 break;
             }
@@ -72,21 +75,32 @@ pub async fn start_command(
 
 /// Executes `raddy stop` via Admin API.
 pub async fn stop_command(address: &str) -> Result<()> {
-    let client = reqwest::Client::new();
-    let url = format!("{}/stop", address.trim_end_matches('/'));
-    tracing::info!("Sending stop request to {}...", url);
+    let target_addr = if address == "http://127.0.0.1:2019" || address == "127.0.0.1:2019" {
+        if Path::new("Caddyfile").exists() {
+            if let Ok(cfg) = crate::commands::config_ops::load_or_adapt(Path::new("Caddyfile"), None) {
+                cfg.admin.and_then(|a| a.listen).unwrap_or_else(|| address.to_string())
+            } else {
+                address.to_string()
+            }
+        } else {
+            address.to_string()
+        }
+    } else {
+        address.to_string()
+    };
+
+    let client = raddy_admin::AdminClient::new(&target_addr);
+    tracing::info!("Sending stop request to {}...", target_addr);
 
     let resp = client
-        .post(&url)
-        .send()
+        .post("/stop", bytes::Bytes::new(), None)
         .await
-        .with_context(|| format!("Failed to connect to Raddy Admin API at '{}'", url))?;
+        .with_context(|| format!("Failed to connect to Raddy Admin API at '{}'", target_addr))?;
 
-    if resp.status().is_success() {
+    if resp.is_success() {
         println!("Stop signal accepted by Admin API.");
         Ok(())
     } else {
-        let err = resp.text().await.unwrap_or_default();
-        bail!("Failed to stop Raddy via Admin API: {}", err);
+        bail!("Failed to stop Raddy via Admin API: {}", resp.text());
     }
 }
