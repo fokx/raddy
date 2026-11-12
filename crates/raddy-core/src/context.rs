@@ -58,7 +58,7 @@ impl Context {
         let orig_method = method.clone();
         let orig_uri = uri.clone();
         let mut response_headers = HeaderMap::new();
-        response_headers.insert(http::header::SERVER, HeaderValue::from_static("Caddy"));
+        response_headers.insert(http::header::SERVER, HeaderValue::from_static("Raddy"));
         Self {
             method,
             orig_method,

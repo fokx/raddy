@@ -1274,7 +1274,7 @@ async fn test_respond_content_type_and_server_header() {
     assert_eq!(ctx.status, Some(StatusCode::OK));
     assert_eq!(
         ctx.response_headers.get(header::SERVER).unwrap(),
-        "Caddy"
+        "Raddy"
     );
     assert_eq!(
         ctx.response_headers.get(header::CONTENT_TYPE).unwrap(),
@@ -1318,7 +1318,7 @@ async fn test_respond_json_and_custom_content_types() {
     );
     assert_eq!(
         ctx.response_headers.get(header::SERVER).unwrap(),
-        "Caddy"
+        "Raddy"
     );
 
     // 2. Custom Content-Type preserved

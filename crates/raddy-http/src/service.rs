@@ -46,7 +46,7 @@ pub async fn handle_request(
                 tracing::info!("Responding to ACME HTTP-01 challenge for token '{}'", token);
                 let resp = Response::builder()
                     .status(StatusCode::OK)
-                    .header(http::header::SERVER, "Caddy")
+                    .header(http::header::SERVER, "Raddy")
                     .header(http::header::CONTENT_TYPE, "text/plain")
                     .body(full_box_body(Bytes::from(key_auth)))
                     .unwrap();

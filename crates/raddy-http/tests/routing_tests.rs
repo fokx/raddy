@@ -332,7 +332,7 @@ async fn test_full_tcp_server_end_to_end() {
         resp.headers()
             .get("server")
             .and_then(|v| v.to_str().ok()),
-        Some("Caddy")
+        Some("Raddy")
     );
     assert_eq!(
         resp.headers()
