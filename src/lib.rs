@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
 pub mod commands;
+pub mod systemd;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -324,7 +325,34 @@ pub async fn run_cli() -> anyhow::Result<()> {
             address,
             force,
         } => {
-            commands::reload::reload_command(&config, adapter.as_deref(), &address, force).await?;
+            // 1. Notify systemd that reloading has started (with MONOTONIC_USEC)
+            if let Ok(monotonic_usec) = crate::systemd::NotifyState::monotonic_usec_now() {
+                if let Err(err) = crate::systemd::notify(&[
+                    crate::systemd::NotifyState::Reloading,
+                    monotonic_usec,
+                    crate::systemd::NotifyState::Status("Reloading configuration"),
+                ]) {
+                    tracing::debug!("systemd notification failed: {err}");
+                }
+            }
+
+            // 2. Perform reload and ALWAYS re-assert Ready, even on failure. Note the Status on error
+            match commands::reload::reload_command(&config, adapter.as_deref(), &address, force).await {
+                Ok(()) => {
+                    let _ = crate::systemd::notify(&[
+                        crate::systemd::NotifyState::Ready,
+                        crate::systemd::NotifyState::Status("Serving HTTP requests"),
+                    ]);
+                }
+                Err(err) => {
+                    tracing::error!("Reload failed: {err}");
+                    let _ = crate::systemd::notify(&[
+                        crate::systemd::NotifyState::Ready,
+                        crate::systemd::NotifyState::Status("Config error; running on previous config"),
+                    ]);
+                    return Err(err);
+                }
+            }
         }
 
         Commands::Validate { config, adapter } => {

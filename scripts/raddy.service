@@ -1,0 +1,14 @@
+[Unit]
+Description=Raddy web server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=notify
+ExecStart=/usr/local/bin/raddy run --config /etc/caddy/Caddyfile
+Restart=on-failure
+ExecReload=/usr/local/bin/raddy reload --config /etc/caddy/Caddyfile --force
+NotifyAccess=all
+
+[Install]
+WantedBy=multi-user.target
