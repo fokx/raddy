@@ -1,0 +1,114 @@
+# Hardened systemd unit for Raddy.
+#
+# Install:
+#   sudo useradd --system --no-create-home --shell /usr/sbin/nologin raddy
+#   sudo install -m 0644 raddy.service.hardened /etc/systemd/system/raddy.service
+#   sudo systemctl daemon-reload && sudo systemctl enable --now raddy
+# Check:
+#   systemd-analyze verify /etc/systemd/system/raddy.service
+#   systemd-analyze security raddy
+#
+# Expects the config in /etc/caddy/Caddyfile (read-only inside the sandbox).
+
+[Unit]
+Description=Raddy web server
+Documentation=https://caddyserver.com/docs/
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=notify
+ExecStart=/usr/local/bin/raddy run --config /etc/caddy/Caddyfile
+Restart=on-failure
+ExecReload=/usr/local/bin/raddy reload --config /etc/caddy/Caddyfile --force
+TimeoutStopSec=30s
+LimitNOFILE=1048576
+# Allow sd_notify access for ExecStart and ExecReload.
+NotifyAccess=exec
+
+User=raddy
+Group=raddy
+UMask=0077
+
+# --- Writable state
+# ACME account, certificates, autosaved config. Created and chowned by systemd.
+StateDirectory=raddy
+StateDirectoryMode=0700
+Environment=HOME=/var/lib/raddy
+# "raddy" is appended to XDG_DATA_HOME, if set.
+Environment=XDG_DATA_HOME=/var/lib
+
+# --- Writable runtime directory (/run/raddy)
+# Admin socket is placed here.
+RuntimeDirectory=raddy
+RuntimeDirectoryMode=0710
+
+# --- Persistent logs in /var/log/raddy
+# For "log { output file /var/log/raddy/access.log }".
+LogsDirectory=raddy
+LogsDirectoryMode=0750
+
+# --- Filesystem view
+# Backstop: the whole tree read-only.
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+
+# Replace whole directories with empty read-only tmpfs, then bind back only
+# what is needed.
+TemporaryFileSystem=/etc:ro /var:ro /run:ro /usr/local:ro
+BindReadOnlyPaths=/usr/local/bin/raddy
+BindReadOnlyPaths=/etc/caddy
+# Allow serving web content from /var/www, if exists.
+BindReadOnlyPaths=-/var/www
+BindReadOnlyPaths=-/etc/ld.so.cache
+BindReadOnlyPaths=-/etc/resolv.conf -/etc/hosts -/etc/nsswitch.conf -/etc/gai.conf
+BindReadOnlyPaths=-/run/systemd/resolve
+BindReadOnlyPaths=-/etc/ssl/certs -/etc/ssl/cert.pem -/etc/pki/tls/certs -/etc/pki/ca-trust
+BindReadOnlyPaths=-/etc/localtime
+# Required for Type=notify.
+BindReadOnlyPaths=/run/systemd/notify
+
+# To serve from /media, /mnt or /opt, reset this list in a systemd override.
+InaccessiblePaths=-/boot -/efi -/lost+found -/media -/mnt -/opt
+
+# Private scratch space.
+TemporaryFileSystem=/tmp:rw,nosuid,nodev,noexec,size=64M
+
+# Nothing is executable except the binary and system libraries.
+NoExecPaths=/
+ExecPaths=/usr/local/bin/raddy -/lib -/lib64 -/usr/lib -/usr/lib64
+
+PrivateDevices=yes
+PrivateIPC=yes
+
+# --- Privileges
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+NoNewPrivileges=yes
+RestrictSUIDSGID=yes
+
+# --- Kernel and process isolation
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictNamespaces=yes
+RestrictRealtime=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RemoveIPC=yes
+
+# --- Network and syscalls
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+SystemCallErrorNumber=EPERM
+
+[Install]
+WantedBy=multi-user.target
