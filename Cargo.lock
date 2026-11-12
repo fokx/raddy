@@ -1637,7 +1637,7 @@ checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
 
 [[package]]
 name = "raddy-admin"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -1665,7 +1665,7 @@ dependencies = [
 
 [[package]]
 name = "raddy-caddyfile"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -1681,7 +1681,7 @@ dependencies = [
 
 [[package]]
 name = "raddy-core"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -1702,7 +1702,7 @@ dependencies = [
 
 [[package]]
 name = "raddy-http"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1749,7 +1749,7 @@ dependencies = [
 
 [[package]]
 name = "raddy-l4"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1773,7 +1773,7 @@ dependencies = [
 
 [[package]]
 name = "raddy-proxy"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1803,7 +1803,7 @@ dependencies = [
 
 [[package]]
 name = "raddy-server"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -1833,7 +1833,7 @@ dependencies = [
 
 [[package]]
 name = "raddy-tls"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1860,7 +1860,7 @@ dependencies = [
 
 [[package]]
 name = "raddyserver"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "anyhow",
  "raddy-server",

@@ -31,21 +31,21 @@ members = [
 ]
 
 [workspace.package]
-version = "0.9.0"
+version = "0.10.0"
 edition = "2024"
 license = "Apache-2.0"
 repository = "https://github.com/fokx/raddy"
 homepage = "https://github.com/fokx/raddy"
 
 [workspace.dependencies]
-raddy-core = { version = "0.9.0", path = "crates/raddy-core" }
-raddy-caddyfile = { version = "0.9.0", path = "crates/raddy-caddyfile" }
-raddy-http = { version = "0.9.0", path = "crates/raddy-http" }
-raddy-tls = { version = "0.9.0", path = "crates/raddy-tls" }
-raddy-proxy = { version = "0.9.0", path = "crates/raddy-proxy" }
-raddy-admin = { version = "0.9.0", path = "crates/raddy-admin" }
-raddy-l4 = { version = "0.9.0", path = "crates/raddy-l4" }
-raddy-server = { version = "0.9.0", path = "." }
+raddy-core = { version = "0.10.0", path = "crates/raddy-core" }
+raddy-caddyfile = { version = "0.10.0", path = "crates/raddy-caddyfile" }
+raddy-http = { version = "0.10.0", path = "crates/raddy-http" }
+raddy-tls = { version = "0.10.0", path = "crates/raddy-tls" }
+raddy-proxy = { version = "0.10.0", path = "crates/raddy-proxy" }
+raddy-admin = { version = "0.10.0", path = "crates/raddy-admin" }
+raddy-l4 = { version = "0.10.0", path = "crates/raddy-l4" }
+raddy-server = { version = "0.10.0", path = "." }
 
 [dependencies]
 raddy-core = { workspace = true }
