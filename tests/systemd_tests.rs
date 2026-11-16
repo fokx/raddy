@@ -14,18 +14,23 @@ mod tests {
             .set_read_timeout(Some(Duration::from_secs(2)))
             .expect("Failed to set read timeout");
 
+        // When NOTIFY_SOCKET is unset or empty, helpers are no-ops
+        unsafe {
+            std::env::remove_var("NOTIFY_SOCKET");
+        }
+        raddy_server::systemd::notify_serving();
+        unsafe {
+            std::env::set_var("NOTIFY_SOCKET", "");
+        }
+        raddy_server::systemd::notify_serving();
+
         // Set NOTIFY_SOCKET for the test process
         unsafe {
             std::env::set_var("NOTIFY_SOCKET", &sock_path);
         }
 
         // 1. Startup notification
-        if let Err(err) = raddy_server::systemd::notify(&[
-            raddy_server::systemd::NotifyState::Ready,
-            raddy_server::systemd::NotifyState::Status("Serving HTTP requests"),
-        ]) {
-            panic!("systemd notification failed: {err}");
-        }
+        raddy_server::systemd::notify_serving();
 
         let mut buf = [0u8; 1024];
         let n = listener
@@ -36,15 +41,7 @@ mod tests {
         assert!(msg.contains("STATUS=Serving HTTP requests\n"));
 
         // 2. Reloading notification (with monotonic usec)
-        let monotonic_usec = raddy_server::systemd::NotifyState::monotonic_usec_now()
-            .expect("Failed to get monotonic time");
-        if let Err(err) = raddy_server::systemd::notify(&[
-            raddy_server::systemd::NotifyState::Reloading,
-            monotonic_usec,
-            raddy_server::systemd::NotifyState::Status("Reloading configuration"),
-        ]) {
-            panic!("systemd notification failed: {err}");
-        }
+        raddy_server::systemd::notify_reloading();
 
         let n = listener
             .recv(&mut buf)
@@ -55,10 +52,7 @@ mod tests {
         assert!(msg.contains("STATUS=Reloading configuration\n"));
 
         // Reload error case re-asserts Ready with previous config status
-        let _ = raddy_server::systemd::notify(&[
-            raddy_server::systemd::NotifyState::Ready,
-            raddy_server::systemd::NotifyState::Status("Config error; running on previous config"),
-        ]);
+        raddy_server::systemd::notify_config_error();
         let n = listener
             .recv(&mut buf)
             .expect("Failed to receive reload error notification");
@@ -67,12 +61,7 @@ mod tests {
         assert!(msg.contains("STATUS=Config error; running on previous config\n"));
 
         // 3. Stopping notification
-        if let Err(err) = raddy_server::systemd::notify(&[
-            raddy_server::systemd::NotifyState::Stopping,
-            raddy_server::systemd::NotifyState::Status("Shutting down"),
-        ]) {
-            panic!("systemd notification failed: {err}");
-        }
+        raddy_server::systemd::notify_stopping();
 
         let n = listener
             .recv(&mut buf)

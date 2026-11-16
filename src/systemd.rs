@@ -1,11 +1,12 @@
 //! systemd service manager notifications (`sd_notify`).
 
 #[cfg(unix)]
-pub use sd_notify::{NotifyState, notify};
+use sd_notify::{NotifyState, notify};
 
 #[cfg(not(unix))]
+#[allow(dead_code)]
 #[derive(Clone, Debug)]
-pub enum NotifyState<'a> {
+enum NotifyState<'a> {
     Ready,
     Reloading,
     Stopping,
@@ -15,25 +16,23 @@ pub enum NotifyState<'a> {
 
 #[cfg(not(unix))]
 impl NotifyState<'_> {
-    pub fn monotonic_usec_now() -> std::io::Result<Self> {
+    fn monotonic_usec_now() -> std::io::Result<Self> {
         Ok(NotifyState::MonotonicUsec(0))
     }
 }
 
 #[cfg(not(unix))]
-pub fn notify(_state: &[NotifyState]) -> std::io::Result<()> {
+fn notify(_state: &[NotifyState]) -> std::io::Result<()> {
     Ok(())
 }
 
 const STATUS_SERVING: &str = "Serving HTTP requests";
+const STATUS_RELOADING: &str = "Reloading configuration";
 const STATUS_CONFIG_ERROR: &str = "Config error; running on previous config";
 const STATUS_SHUTTING_DOWN: &str = "Shutting down";
 
 fn enabled() -> bool {
-    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ENABLED.get_or_init(|| {
-        std::env::var_os("NOTIFY_SOCKET").is_some_and(|v| !v.is_empty())
-    })
+    std::env::var_os("NOTIFY_SOCKET").is_some_and(|v| !v.is_empty())
 }
 
 fn send(states: &[NotifyState]) {
@@ -55,12 +54,17 @@ pub fn notify_config_error() {
 }
 
 pub fn notify_reloading() {
-    if let Ok(monotonic_usec) = NotifyState::monotonic_usec_now() {
-        send(&[
+    if !enabled() {
+        return;
+    }
+
+    match NotifyState::monotonic_usec_now() {
+        Ok(monotonic_usec) => send(&[
             NotifyState::Reloading,
             monotonic_usec,
-            NotifyState::Status("Reloading configuration"),
-        ]);
+            NotifyState::Status(STATUS_RELOADING),
+        ]),
+        Err(err) => tracing::warn!("systemd notification failed: {err}"),
     }
 }
 
