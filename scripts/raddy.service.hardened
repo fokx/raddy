@@ -1,7 +1,7 @@
 # Hardened systemd unit for Raddy.
 #
 # Install:
-#   sudo useradd --system --no-create-home --shell /usr/sbin/nologin raddy
+#   sudo useradd --system --user-group --no-create-home --shell /usr/sbin/nologin raddy
 #   sudo install -m 0644 raddy.service.hardened /etc/systemd/system/raddy.service
 #   sudo systemctl daemon-reload && sudo systemctl enable --now raddy
 # Check:
@@ -31,7 +31,7 @@ Group=raddy
 UMask=0077
 
 # --- Writable state
-# ACME account, certificates, autosaved config. Created and chowned by systemd.
+# ACME account and certificates. Created and chowned by systemd.
 StateDirectory=raddy
 StateDirectoryMode=0700
 Environment=HOME=/var/lib/raddy
@@ -39,7 +39,7 @@ Environment=HOME=/var/lib/raddy
 Environment=XDG_DATA_HOME=/var/lib
 
 # --- Writable runtime directory (/run/raddy)
-# Admin socket is placed here.
+# Optional location for the Admin Unix socket (e.g. `admin unix//run/raddy/admin.sock`).
 RuntimeDirectory=raddy
 RuntimeDirectoryMode=0710
 
@@ -62,9 +62,9 @@ BindReadOnlyPaths=/etc/caddy
 # Allow serving web content from /var/www, if exists.
 BindReadOnlyPaths=-/var/www
 BindReadOnlyPaths=-/etc/ld.so.cache
-BindReadOnlyPaths=-/etc/resolv.conf -/etc/hosts -/etc/nsswitch.conf -/etc/gai.conf
+BindReadOnlyPaths=-/etc/resolv.conf -/etc/hosts -/etc/hostname -/etc/nsswitch.conf -/etc/gai.conf
 BindReadOnlyPaths=-/run/systemd/resolve
-BindReadOnlyPaths=-/etc/ssl/certs -/etc/ssl/cert.pem -/etc/pki/tls/certs -/etc/pki/ca-trust
+BindReadOnlyPaths=-/etc/ssl/certs -/etc/ssl/cert.pem -/etc/ca-certificates -/etc/pki/tls/certs -/etc/pki/ca-trust
 BindReadOnlyPaths=-/etc/localtime
 # Required for Type=notify.
 BindReadOnlyPaths=/run/systemd/notify
