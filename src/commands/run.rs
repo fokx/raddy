@@ -323,44 +323,23 @@ async fn run_server_loop(
                     "Config file '{}' modified, auto-reloading...",
                     watch_path.display()
                 );
-                if let Ok(monotonic_usec) = crate::systemd::NotifyState::monotonic_usec_now() {
-                    if let Err(err) = crate::systemd::notify(&[
-                        crate::systemd::NotifyState::Reloading,
-                        monotonic_usec,
-                        crate::systemd::NotifyState::Status("Reloading configuration"),
-                    ]) {
-                        tracing::debug!("systemd notification failed: {err}");
-                    }
-                }
+                crate::systemd::notify_reloading();
                 match load_or_adapt(&watch_path, watch_adapter.as_deref()) {
                     Ok(new_cfg) => {
                         if let Err(e) = watch_state.reload(new_cfg).await {
                             tracing::error!("Failed to hot reload modified config: {}", e);
-                            let _ = crate::systemd::notify(&[
-                                crate::systemd::NotifyState::Ready,
-                                crate::systemd::NotifyState::Status(
-                                    "Config error; running on previous config",
-                                ),
-                            ]);
+                            crate::systemd::notify_config_error();
                         } else {
                             tracing::info!(
                                 "Successfully reloaded configuration from '{}'",
                                 watch_path.display()
                             );
-                            let _ = crate::systemd::notify(&[
-                                crate::systemd::NotifyState::Ready,
-                                crate::systemd::NotifyState::Status("Serving HTTP requests"),
-                            ]);
+                            crate::systemd::notify_serving();
                         }
                     }
                     Err(e) => {
                         tracing::error!("Error reading modified config: {}", e);
-                        let _ = crate::systemd::notify(&[
-                            crate::systemd::NotifyState::Ready,
-                            crate::systemd::NotifyState::Status(
-                                "Config error; running on previous config",
-                            ),
-                        ]);
+                        crate::systemd::notify_config_error();
                     }
                 }
             }
@@ -371,12 +350,7 @@ async fn run_server_loop(
 
     tracing::info!("Raddy server running. Press Ctrl+C to stop.");
 
-    if let Err(err) = crate::systemd::notify(&[
-        crate::systemd::NotifyState::Ready,
-        crate::systemd::NotifyState::Status("Serving HTTP requests"),
-    ]) {
-        tracing::debug!("systemd notification failed: {err}");
-    }
+    crate::systemd::notify_serving();
 
     tokio::select! {
         sig = wait_for_shutdown_signal() => {
@@ -384,12 +358,7 @@ async fn run_server_loop(
             tracing::warn!(signal = sig, "exiting; byeee!! 👋");
             tracing::info!("http servers shutting down with eternal grace period");
 
-            if let Err(err) = crate::systemd::notify(&[
-                crate::systemd::NotifyState::Stopping,
-                crate::systemd::NotifyState::Status("Shutting down"),
-            ]) {
-                tracing::debug!("systemd notification failed: {err}");
-            }
+            crate::systemd::notify_stopping();
 
             let _ = admin_shutdown_tx.send(true);
             state.stop_servers();
@@ -407,12 +376,7 @@ async fn run_server_loop(
         _ = state.exit_notify.notified() => {
             tracing::info!("Received stop signal via Admin API, exiting...");
 
-            if let Err(err) = crate::systemd::notify(&[
-                crate::systemd::NotifyState::Stopping,
-                crate::systemd::NotifyState::Status("Shutting down"),
-            ]) {
-                tracing::debug!("systemd notification failed: {err}");
-            }
+            crate::systemd::notify_stopping();
 
             let _ = admin_shutdown_tx.send(true);
             state.stop_all();
